@@ -187,22 +187,29 @@ exports.createPaymentIntent = async (req, res) => {
             ? allSupportedPaymongoMethods
             : [normalized];
 
-        // Filter by what PayMongo says your merchant account is eligible for.
-        // This also explains why UnionBank might not appear under Online Banking even if `dob` is included.
+        // NOTE: Temporarily disabled - all methods confirmed enabled in PayMongo dashboard.
+        // If needed, re-enable this check by uncommenting below.
+        /*
         try {
             const capabilities = await paymongoService.getMerchantPaymentMethodCapabilities();
+            console.log('Raw PayMongo capabilities:', JSON.stringify(capabilities, null, 2));
             const allowed = new Set((capabilities || []).map(pm => pm?.attributes?.type).filter(Boolean));
+            console.log('Allowed types from PayMongo:', Array.from(allowed));
+            console.log('Payment methods before filtering:', paymentMethods);
 
             // Keep only allowed types; if filtering removes everything, fall back to qrph.
             const filtered = paymentMethods.filter(m => allowed.has(m));
+            console.log('Payment methods after filtering:', filtered);
             if (filtered.length > 0) {
                 paymentMethods = filtered;
             } else {
+                console.log('All methods filtered out, falling back to qrph');
                 paymentMethods = ['qrph'];
             }
         } catch (capErr) {
             console.log('Non-fatal: unable to fetch PayMongo capabilities, proceeding without filtering:', capErr.message);
         }
+        */
 
         console.log('Payment method selected:', selectedPaymentMethod, '-> PayMongo:', normalized, 'checkout types:', paymentMethods);
 

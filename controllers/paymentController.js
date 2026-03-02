@@ -11,7 +11,8 @@ const PRODUCTS = {
     'Freelancer Plan': { amount: 3500, currency: 'PHP' },
     'Dedicated Coaching': { amount: 999, currency: 'PHP' },
     'Customization Plan': { amount: 5000, currency: 'PHP' },
-    'Client Finder Tool': { amount: 500, currency: 'PHP' }
+    'Client Finder Tool': { amount: 500, currency: 'PHP' },
+    'Customized Coaching + OJT': { amount: 1990, currency: 'PHP' }
 };
 
 // Create payment intent

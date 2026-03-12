@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 
 const paymentRoutes = require('./routes/payments');
+const clockistryRoutes = require('./routes/clockistry');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -47,6 +48,7 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 
 // Routes
 app.use('/api/payments', paymentRoutes);
+app.use('/api/clockistry', clockistryRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -66,6 +68,7 @@ app.get('/', (req, res) => {
             createPayment: '/api/payments/create-payment-intent',
             paymentWebhook: '/api/payments/webhook',
             checkStatus: '/api/payments/status/:id',
+            clockistryPayment: '/api/clockistry/create-payment-intent',
             health: '/health'
         }
     });

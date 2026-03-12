@@ -2,6 +2,7 @@
 const paymongoService = require('../services/paymongoService');
 const webhookService = require('../services/webhookService');
 const ghlService = require('../services/ghlService');
+const clockistryController = require('./clockistryController');
 const { generateId, validateEmail, validateMobile, calculateTaxedAmount } = require('../utils/helpers');
 
 // Product pricing mapping
@@ -446,6 +447,25 @@ async function handlePaymentSuccess(attributes) {
     const paymentData = attributes.data || {};
     const metadata = paymentData.attributes?.metadata || {};
 
+    // Check if this is a Clockistry payment - skip GHL for Clockistry
+    const isClockistry = metadata.source === 'clockistry';
+
+    // Forward to Clockistry if applicable
+    if (isClockistry) {
+        try {
+            await clockistryController.forwardWebhookToClockistry({ data: { attributes } });
+            console.log('Clockistry payment success forwarded');
+        } catch (err) {
+            console.log('Clockistry forward error (non-fatal):', err.message);
+        }
+    }
+
+    // Skip GHL and LeadConnector for Clockistry payments
+    if (isClockistry) {
+        console.log('Clockistry payment - skipping GHL and LeadConnector integration');
+        return;
+    }
+
     try {
         if (process.env.GHL_PRIVATE_KEY && process.env.GHL_LOCATION_ID) {
             const amountCentavos = Number(paymentData.attributes?.amount);
@@ -548,6 +568,21 @@ async function handlePaymentFailure(attributes) {
 
     const paymentData = attributes.data || {};
     const metadata = paymentData.attributes?.metadata || {};
+
+    // Check if this is a Clockistry payment
+    const isClockistry = metadata.source === 'clockistry';
+
+    // Forward to Clockistry if applicable
+    if (isClockistry) {
+        try {
+            await clockistryController.forwardWebhookToClockistry({ data: { attributes } });
+            console.log('Clockistry payment failure forwarded');
+        } catch (err) {
+            console.log('Clockistry forward error (non-fatal):', err.message);
+        }
+        // Skip LeadConnector for Clockistry
+        return;
+    }
 
     await webhookService.sendToLeadConnector({
         ...metadata,

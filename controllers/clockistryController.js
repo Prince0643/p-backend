@@ -63,9 +63,9 @@ exports.createPaymentIntent = async (req, res) => {
                             description: `Subscription for ${count} user(s)`,
                             quantity: 1
                         }],
-                        payment_method_types: ['card', 'gcash', 'qrph', /* 'maya', */ 'grab_pay'],
-                        success_url: successUrl || 'https://nexiflow-new.nexistrydigitalsolutions.com/billing/success',
-                        cancel_url: cancelUrl || 'https://nexiflow-new.nexistrydigitalsolutions.com/billing/cancel',
+                        payment_method_types: ['card', 'gcash', 'qrph', 'grab_pay'],
+                        success_url: successUrl || 'https://nexi-flow.com/billing/success',
+                        cancel_url: cancelUrl || 'https://nexi-flow.com/billing/cancel',
                         description: `Upgrade to ${plan} plan`,
                         send_email_receipt: true,
                         show_description: true,

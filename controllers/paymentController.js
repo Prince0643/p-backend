@@ -37,6 +37,7 @@ exports.createPaymentIntent = async (req, res) => {
             amount,        // ✅ ADD: Receive amount from frontend (with discount)
             discountAmount, // ✅ ADD: Receive discount amount
             promoCode,     // ✅ ADD: Receive promo code used
+            referredBy,
             metadata = {}
         } = req.body;
 
@@ -127,6 +128,9 @@ exports.createPaymentIntent = async (req, res) => {
             // ✅ ADD: Discount information
             discountAmount: String(discountAmount || 0),
             promoCode: String(promoCode || ''),
+
+            // ✅ ADD: Referral information
+            referredBy: String(referredBy || ''),
 
             // Optional fields
             notes: String(notes || ''),
@@ -249,6 +253,7 @@ exports.createPaymentIntent = async (req, res) => {
             targetClient,
             paymentMethod, // ✅ Now included
             source,        // ✅ Now included
+            referredBy: referredBy || '',
             status: 'payment_initiated',
             paymentIntentId: paymentIntent.id,
             checkoutUrl: paymentIntent.attributes.checkout_url,

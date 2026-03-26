@@ -111,7 +111,7 @@ exports.createPaymentIntent = async (req, res) => {
             promoCode
         });
 
-        // ✅ FIXED: Flatten metadata - include paymentMethod and source
+        // FIXED: Flatten metadata - include paymentMethod and source
         const flattenedMetadata = {
             // Required fields
             fullName: String(fullName || ''),
@@ -125,11 +125,11 @@ exports.createPaymentIntent = async (req, res) => {
             taxAmount: String(taxAmount),
             totalAmount: String(finalAmount),
 
-            // ✅ ADD: Discount information
+            // ADD: Discount information
             discountAmount: String(discountAmount || 0),
             promoCode: String(promoCode || ''),
 
-            // ✅ ADD: Referral information
+            // ADD: Referral information
             referredBy: String(referredBy || ''),
 
             // Optional fields

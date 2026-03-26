@@ -285,7 +285,7 @@ exports.createPaymentIntent = async (req, res) => {
     }
 };
 
-// Get payment status
+// Get payment statuses
 exports.getPaymentStatus = async (req, res) => {
     try {
         const { paymentId } = req.params;

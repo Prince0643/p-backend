@@ -35,9 +35,13 @@ class PayMongoService {
     }
 
     // Create a payment intent
-    async createPaymentIntent({ amount, currency, description, paymentMethodAllowed, metadata, paymentMethodTypes }) {
+    async createPaymentIntent({ amount, currency, description, paymentMethodAllowed, metadata, paymentMethodTypes, successUrl, failureUrl, cancelUrl }) {
         try {
             const formattedCurrency = this.formatCurrency(currency);
+
+            const resolvedSuccessUrl = successUrl || process.env.FRONTEND_SUCCESS_URL || 'https://nxacademy.nexistrydigitalsolutions.com/success?session_id={CHECKOUT_SESSION_ID}';
+            const resolvedFailureUrl = failureUrl || process.env.FRONTEND_FAILURE_URL || 'https://nxacademy.nexistrydigitalsolutions.com/failed';
+            const resolvedCancelUrl = cancelUrl || process.env.FRONTEND_CANCEL_URL || 'https://nxacademy.nexistrydigitalsolutions.com/cancelled';
 
             // Map payment methods for checkout session
             // PayMongo uses different identifiers for checkout sessions vs payment intents
@@ -108,9 +112,9 @@ class PayMongoService {
                         payment_method_types: checkoutMethodTypes,
                         description,
                         metadata,
-                        success_url: process.env.FRONTEND_SUCCESS_URL || 'https://nxacademy.nexistrydigitalsolutions.com/success?session_id={CHECKOUT_SESSION_ID}',
-                        failure_url: process.env.FRONTEND_FAILURE_URL || 'https://nxacademy.nexistrydigitalsolutions.com/failed',
-                        cancel_url: process.env.FRONTEND_CANCEL_URL || 'https://nxacademy.nexistrydigitalsolutions.com/cancelled'
+                        success_url: resolvedSuccessUrl,
+                        failure_url: resolvedFailureUrl,
+                        cancel_url: resolvedCancelUrl
                     }
                 }
             });
@@ -166,9 +170,13 @@ class PayMongoService {
     }
 
     // Create a checkout session (kept for backward compatibility)
-    async createCheckoutSession(paymentIntentId, { amount, currency, description, metadata }) {
+    async createCheckoutSession(paymentIntentId, { amount, currency, description, metadata, successUrl, failureUrl, cancelUrl }) {
         try {
             const formattedCurrency = this.formatCurrency(currency);
+
+            const resolvedSuccessUrl = successUrl || process.env.FRONTEND_SUCCESS_URL || 'https://nxacademy.nexistrydigitalsolutions.com/success?session_id={CHECKOUT_SESSION_ID}';
+            const resolvedFailureUrl = failureUrl || process.env.FRONTEND_FAILURE_URL || 'https://nxacademy.nexistrydigitalsolutions.com/failed';
+            const resolvedCancelUrl = cancelUrl || process.env.FRONTEND_CANCEL_URL || 'https://nxacademy.nexistrydigitalsolutions.com/cancelled';
 
             const response = await this.client.post('/checkout_sessions', {
                 data: {
@@ -189,9 +197,9 @@ class PayMongoService {
                         payment_method_types: ['qrph'],
                         description,
                         metadata,
-                        success_url: process.env.FRONTEND_SUCCESS_URL || 'https://nxacademy.nexistrydigitalsolutions.com/success?session_id={CHECKOUT_SESSION_ID}',
-                        failure_url: process.env.FRONTEND_FAILURE_URL || 'https://nxacademy.nexistrydigitalsolutions.com/failed',
-                        cancel_url: process.env.FRONTEND_CANCEL_URL || 'https://nxacademy.nexistrydigitalsolutions.com/cancelled'
+                        success_url: resolvedSuccessUrl,
+                        failure_url: resolvedFailureUrl,
+                        cancel_url: resolvedCancelUrl
                     }
                 }
             });

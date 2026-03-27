@@ -224,13 +224,27 @@ exports.createPaymentIntent = async (req, res) => {
 
         console.log('Payment method selected:', selectedPaymentMethod, '-> PayMongo:', normalized, 'checkout types:', paymentMethods);
 
+        const coreSuccessUrlDefault = 'https://nexistrycoreph.nexistrydigitalsolutions.com/product-thank-you-page-703324-971918-441701';
+        const successUrl = (source === 'nexistry_core_ph')
+            ? (process.env.NX_CORE_FRONTEND_SUCCESS_URL || coreSuccessUrlDefault)
+            : undefined;
+        const failureUrl = (source === 'nexistry_core_ph')
+            ? (process.env.NX_CORE_FRONTEND_FAILURE_URL || process.env.FRONTEND_FAILURE_URL)
+            : undefined;
+        const cancelUrl = (source === 'nexistry_core_ph')
+            ? (process.env.NX_CORE_FRONTEND_CANCEL_URL || process.env.FRONTEND_CANCEL_URL)
+            : undefined;
+
         const paymentIntent = await paymongoService.createPaymentIntent({
             amount: finalAmount,
             currency: productInfo.currency,
             description: `${normalizedProduct} - ${fullName}${discountAmount > 0 ? ` (Promo: ${promoCode})` : ''}`,
             paymentMethodAllowed: paymentMethods,
             paymentMethodTypes: paymentMethods,
-            metadata: flattenedMetadata
+            metadata: flattenedMetadata,
+            successUrl,
+            failureUrl,
+            cancelUrl
         });
 
         console.log('Payment intent created:', paymentIntent.id);

@@ -16,7 +16,8 @@ const PRODUCTS = {
     'Customized Coaching + OJT': { amount: 1990, currency: 'PHP' },
     'Starter Plan': { amount: 5000, currency: 'PHP' },
     'Flexible Plan': { amount: 7000, currency: 'PHP' },
-    'Flexible Plan with AI-Add On': { amount: 15000, currency: 'PHP' }
+    'Flexible Plan with AI-Add On': { amount: 15000, currency: 'PHP' },
+    'Flexible Plan with AI-Add On and Third-Party Integration': { amount: 20800, currency: 'PHP' }
 };
 
 // Create payment intent

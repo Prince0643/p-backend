@@ -240,7 +240,7 @@ exports.createPaymentIntent = async (req, res) => {
             ? (process.env.NX_CORE_FRONTEND_FAILURE_URL || process.env.FRONTEND_FAILURE_URL)
             : undefined;
         const cancelUrl = (source === 'nexistry_core_ph')
-            ? (process.env.NX_CORE_FRONTEND_CANCEL_URL || process.env.FRONTEND_CANCEL_URL)
+            ? 'https://nexistrycoreph.nexistrydigitalsolutions.com/ph-ver-753092'
             : undefined;
 
         const paymentIntent = await paymongoService.createPaymentIntent({

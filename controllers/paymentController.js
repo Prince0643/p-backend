@@ -13,7 +13,8 @@ const PRODUCTS = {
     'Dedicated Coaching': { amount: 999, currency: 'PHP' },
     'Customization Plan': { amount: 5000, currency: 'PHP' },
     'Client Finder Tool': { amount: 500, currency: 'PHP' },
-    'Customized Coaching + OJT': { amount: 1990, currency: 'PHP' }
+    'Customized Coaching + OJT': { amount: 1990, currency: 'PHP' },
+    'Starter Plan': { amount: 5000, currency: 'PHP' }
 };
 
 // Create payment intent
@@ -41,8 +42,10 @@ exports.createPaymentIntent = async (req, res) => {
             metadata = {}
         } = req.body;
 
+        const normalizedProduct = String(product || '').trim();
+
         // Validate required fields
-        if (!fullName || !email || !mobile || !product) {
+        if (!fullName || !email || !mobile || !normalizedProduct) {
             return res.status(400).json({
                 error: 'Missing required fields',
                 required: ['fullName', 'email', 'mobile', 'product']
@@ -60,7 +63,7 @@ exports.createPaymentIntent = async (req, res) => {
         }
 
         // Get product amount - Use frontend amount if provided (with discount), otherwise use product mapping
-        const productInfo = PRODUCTS[product];
+        const productInfo = PRODUCTS[normalizedProduct];
         if (!productInfo) {
             return res.status(400).json({ error: 'Invalid product' });
         }
@@ -68,7 +71,9 @@ exports.createPaymentIntent = async (req, res) => {
         // Generate unique payment reference
         const paymentReference = generateId('PAY');
 
-        const taxRate = process.env.TAX_RATE ?? 0.10;
+        const defaultTaxRate = Number(process.env.TAX_RATE ?? 0.10);
+        const coreTaxRate = Number(process.env.NX_CORE_TAX_RATE ?? 0.12);
+        const taxRate = (source === 'nexistry_core_ph') ? coreTaxRate : defaultTaxRate;
         
         // ✅ FIXED: Use frontend amount if provided and valid, otherwise calculate from product
         let finalAmount, baseAmount, taxAmount;
@@ -103,7 +108,7 @@ exports.createPaymentIntent = async (req, res) => {
             fullName,
             email,
             mobile,
-            product,
+            product: normalizedProduct,
             paymentMethod,
             source,
             frontendAmount: amount,
@@ -117,7 +122,7 @@ exports.createPaymentIntent = async (req, res) => {
             fullName: String(fullName || ''),
             email: String(email || ''),
             mobile: String(mobile || ''),
-            product: String(product || ''),
+            product: String(normalizedProduct || ''),
             paymentReference: String(paymentReference || ''),
 
             baseAmount: String(baseAmount),
@@ -222,7 +227,7 @@ exports.createPaymentIntent = async (req, res) => {
         const paymentIntent = await paymongoService.createPaymentIntent({
             amount: finalAmount,
             currency: productInfo.currency,
-            description: `${product} - ${fullName}${discountAmount > 0 ? ` (Promo: ${promoCode})` : ''}`,
+            description: `${normalizedProduct} - ${fullName}${discountAmount > 0 ? ` (Promo: ${promoCode})` : ''}`,
             paymentMethodAllowed: paymentMethods,
             paymentMethodTypes: paymentMethods,
             metadata: flattenedMetadata
@@ -235,7 +240,7 @@ exports.createPaymentIntent = async (req, res) => {
             fullName,
             email,
             mobile,
-            product,
+            product: normalizedProduct,
             amount: finalAmount,
             currency: productInfo.currency,
             paymentReference,

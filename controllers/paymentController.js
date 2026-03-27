@@ -20,7 +20,9 @@ const PRODUCTS = {
     'Flexible Plan with AI-Add On and Third-Party Integration': { amount: 20800, currency: 'PHP' },
     'Flexible Plan with Third-Party Integration': { amount: 12800, currency: 'PHP' },
     'Premium Plan': { amount: 10000, currency: 'PHP' },
-    'Premium Plan with AI-Add On': { amount: 19200, currency: 'PHP' }
+    'Premium Plan with AI-Add On': { amount: 19200, currency: 'PHP' },
+    'Premium Plan with AI-Add On and Third Party Integration': { amount: 25000, currency: 'PHP' },
+    'Premium Plan with Third-Party Integration': { amount: 17000, currency: 'PHP' }
 };
 
 // Create payment intent

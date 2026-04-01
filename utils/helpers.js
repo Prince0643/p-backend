@@ -14,15 +14,22 @@ function validateEmail(email) {
     return re.test(email);
 }
 
-// Validate mobile number (Philippines format)
+// Validate mobile number (International format - E.164)
 function validateMobile(mobile) {
-    // Remove any non-digit characters
-    const cleaned = mobile.replace(/\D/g, '');
-
-    // Check if it's a valid PH mobile number
-    // Format: 09XXXXXXXXX or +639XXXXXXXXX
-    const phMobileRegex = /^(09|\+639)\d{9}$/;
-    return phMobileRegex.test(cleaned) || phMobileRegex.test('+63' + cleaned.substring(1));
+    if (!mobile || typeof mobile !== 'string') return false;
+    
+    // Remove all non-digit characters except + for international
+    const cleaned = mobile.replace(/[^\d+]/g, '');
+    
+    // International phone validation (E.164 format)
+    // Supports: +639XXXXXXXXX (PH), +1XXXXXXXXXX (US), +44XXXXXXXXXX (UK), +91XXXXXXXXXX (IN), etc.
+    // Minimum 8 digits (excluding +), maximum 15 digits
+    const internationalRegex = /^\+[1-9]\d{7,14}$/;
+    
+    // Philippine format without +: 09XXXXXXXXX (legacy support)
+    const phRegex = /^(09|639)\d{9}$/;
+    
+    return internationalRegex.test(cleaned) || phRegex.test(cleaned);
 }
 
 // Format amount to PHP

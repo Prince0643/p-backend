@@ -14,6 +14,7 @@ const PRODUCTS = {
     'Customization Plan': { amount: 5000, currency: 'PHP' },
     'Client Finder Tool': { amount: 500, currency: 'PHP' },
     'Customized Coaching + OJT': { amount: 1990, currency: 'PHP' },
+    '500 AI Prompts': { amount: 550, currency: 'PHP' },
     'Starter Plan': { amount: 5000, currency: 'PHP' },
     'Flexible Plan': { amount: 7000, currency: 'PHP' },
     'Flexible Plan with AI-Add On': { amount: 15000, currency: 'PHP' },

@@ -333,7 +333,8 @@ exports.getPaymongoCapabilities = async (req, res) => {
             capabilities: sanitized
         });
     } catch (error) {
-        res.status(500).json({
+        // Treat upstream capability fetch failures as a Bad Gateway.
+        res.status(502).json({
             success: false,
             error: 'Failed to retrieve PayMongo capabilities',
             message: error.message

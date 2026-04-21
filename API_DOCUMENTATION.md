@@ -277,6 +277,10 @@ curl -sS https://api.nexistrydigitalsolutions.com/api/payments/capabilities \
 }
 ```
 
+#### Error response
+
+If PayMongo returns an unexpected response shape or the upstream request fails, this endpoint returns HTTP `502`.
+
 ---
 
 ### 7. Validate Payment Details

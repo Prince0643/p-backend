@@ -27,10 +27,17 @@ class PayMongoService {
     async getMerchantPaymentMethodCapabilities() {
         try {
             const response = await this.client.get('/merchants/capabilities/payment_methods');
-            return response.data?.data;
+            const data = response?.data?.data;
+            if (!Array.isArray(data)) {
+                const topLevelKeys = response?.data && typeof response.data === 'object'
+                    ? Object.keys(response.data)
+                    : [];
+                throw new Error(`Unexpected PayMongo capabilities response shape (expected data[]). Keys: ${topLevelKeys.join(',') || 'none'}`);
+            }
+            return data;
         } catch (error) {
             console.error('PayMongo merchant capabilities error:', error.response?.data || error.message);
-            throw new Error('Failed to retrieve merchant payment method capabilities');
+            throw new Error(error.message || 'Failed to retrieve merchant payment method capabilities');
         }
     }
 

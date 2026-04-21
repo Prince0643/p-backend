@@ -186,8 +186,10 @@ exports.createPaymentIntent = async (req, res) => {
             'maya': 'paymaya',
             'shopeepay': 'shopee_pay',
             'bpi': 'dob',
-            'unionbank': 'dob',
+            // UnionBank is a separate DOB capability for some merchants.
+            'unionbank': 'dob_ubp',
             'dob': 'dob',
+            'dob_ubp': 'dob_ubp',
             'qrph': 'qrph',
             'card': 'card'
         };
@@ -198,7 +200,8 @@ exports.createPaymentIntent = async (req, res) => {
             'grab_pay',
             'paymaya',
             'shopee_pay',
-            'dob'
+            'dob',
+            'dob_ubp'
         ];
 
         const normalized = methodMap[selectedPaymentMethod] || 'qrph';
@@ -320,6 +323,14 @@ exports.getPaymongoCapabilities = async (req, res) => {
 
         const sanitized = (capabilities || []).map((pm) => {
             // PayMongo typically returns JSON:API resources, but be defensive and expose safe structure hints.
+            if (typeof pm === 'string') {
+                return {
+                    methodType: pm,
+                    entryKeys: [],
+                    attributesKeys: []
+                };
+            }
+
             const isObject = pm !== null && typeof pm === 'object' && !Array.isArray(pm);
             const attributes = isObject ? pm.attributes : undefined;
 

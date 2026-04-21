@@ -89,6 +89,8 @@ class PayMongoService {
                 'shopee_pay': 'shopee_pay',
                 // Online banking is represented by `dob` (Direct Online Banking)
                 'dob': 'dob',
+                // Some merchants have UnionBank enabled as a separate capability/type.
+                'dob_ubp': 'dob_ubp',
                 'card': 'card',
                 'qrph': 'qrph'
             };

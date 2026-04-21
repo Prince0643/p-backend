@@ -318,14 +318,32 @@ exports.getPaymongoCapabilities = async (req, res) => {
     try {
         const capabilities = await paymongoService.getMerchantPaymentMethodCapabilities();
 
-        const sanitized = (capabilities || []).map(pm => ({
-            id: pm?.id,
-            type: pm?.type,
-            methodType: pm?.attributes?.type,
-            status: pm?.attributes?.status,
-            brand: pm?.attributes?.brand,
-            country: pm?.attributes?.country
-        }));
+        const sanitized = (capabilities || []).map((pm) => {
+            // PayMongo typically returns JSON:API resources, but be defensive and expose safe structure hints.
+            const isObject = pm !== null && typeof pm === 'object' && !Array.isArray(pm);
+            const attributes = isObject ? pm.attributes : undefined;
+
+            const methodType = attributes?.type ?? pm?.type;
+            const status = attributes?.status;
+            const country = attributes?.country;
+            const brand = attributes?.brand;
+            const id = pm?.id;
+
+            const entryKeys = isObject ? Object.keys(pm) : [];
+            const attributesKeys = attributes && typeof attributes === 'object' ? Object.keys(attributes) : [];
+
+            return {
+                id,
+                methodType,
+                status,
+                brand,
+                country,
+                entryKeys,
+                attributesKeys,
+                // If everything is missing, include a safe string representation for debugging.
+                debugValue: (id || methodType || status) ? undefined : String(pm)
+            };
+        });
 
         res.status(200).json({
             success: true,

@@ -117,7 +117,9 @@ class PayMongoService {
                         currency: formattedCurrency,
                         description,
                         statement_descriptor: 'Nexistry Academy',
-                        payment_method_allowed: paymentMethodAllowed || ['qrph'],
+                        // PaymentIntent `payment_method_allowed` can be stricter than Checkout Session `payment_method_types`.
+                        // Keep this list conservative; the Checkout Session ultimately drives what the user can choose.
+                        payment_method_allowed: (paymentMethodAllowed || ['qrph']).filter((m) => m !== 'dob_ubp'),
                         metadata
                     }
                 }

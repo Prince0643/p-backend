@@ -247,12 +247,18 @@ exports.createPaymentIntent = async (req, res) => {
             ? 'https://nexistrycoreph.nexistrydigitalsolutions.com/ph-ver-753092'
             : undefined;
 
+        // Some PayMongo method types may be eligible for Checkout, but not accepted in PaymentIntent's
+        // `payment_method_allowed` field. Keep a conservative allowlist for PaymentIntent, while
+        // still offering the full set in Checkout Session `payment_method_types`.
+        const checkoutMethodTypes = paymentMethods;
+        const paymentIntentAllowed = paymentMethods.map(m => (m === 'dob_ubp' ? 'dob' : m));
+
         const paymentIntent = await paymongoService.createPaymentIntent({
             amount: finalAmount,
             currency: productInfo.currency,
             description: `${normalizedProduct} - ${fullName}${discountAmount > 0 ? ` (Promo: ${promoCode})` : ''}`,
-            paymentMethodAllowed: paymentMethods,
-            paymentMethodTypes: paymentMethods,
+            paymentMethodAllowed: paymentIntentAllowed,
+            paymentMethodTypes: checkoutMethodTypes,
             metadata: flattenedMetadata,
             successUrl,
             failureUrl,

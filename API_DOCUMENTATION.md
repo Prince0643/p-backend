@@ -18,11 +18,11 @@ This backend provides a REST API for processing payments through PayMongo (Phili
 ## Base URL
 
 ```
-Production: https://your-domain.com/api
-Health Check: https://your-domain.com/health
+Production: https://api.nexistrydigitalsolutions.com/api
+Health Check: https://api.nexistrydigitalsolutions.com/health
 ```
 
-Replace `your-domain.com` with the actual deployed domain.
+Replace the base URL if you're running in a different environment.
 
 ---
 
@@ -78,12 +78,13 @@ Creates a new payment intent and returns a checkout URL for the customer to comp
 
 | Method ID | Description | Category |
 |-----------|-------------|----------|
-| `qrph` | QRPh (All Methods via QR) | QR |
+| `all` | Let backend include all available PayMongo methods (recommended default) | Mixed |
+| `qrph` | QRPh only | QR |
 | `gcash` | GCash E-Wallet | E-Wallet |
 | `grabpay` | GrabPay E-Wallet | E-Wallet |
 | `maya` | Maya E-Wallet | E-Wallet |
 | `shopeepay` | ShopeePay E-Wallet | E-Wallet |
-| `dob` | Online Banking (bank list shown by PayMongo at checkout) | Bank |
+| `dob` | Online Banking (PayMongo renders the bank list in checkout; includes BPI/UnionBank only if enabled for your merchant) | Bank |
 | `card` | Credit/Debit Card | Card |
 
 #### Available Products
@@ -233,8 +234,7 @@ Returns the list of available payment methods supported by the backend.
     { "id": "grabpay", "name": "GrabPay", "icon": "grab-icon.png", "category": "ewallet" },
     { "id": "maya", "name": "Maya", "icon": "maya-icon.png", "category": "ewallet" },
     { "id": "shopeepay", "name": "ShopeePay", "icon": "shopee-icon.png", "category": "ewallet" },
-    { "id": "bpi", "name": "BPI Online", "icon": "bpi-icon.png", "category": "bank" },
-    { "id": "unionbank", "name": "UnionBank Online", "icon": "unionbank-icon.png", "category": "bank" },
+    { "id": "dob", "name": "Online Banking", "icon": "online-banking-icon.png", "category": "bank" },
     { "id": "card", "name": "Credit/Debit Card", "icon": "card-icon.png", "category": "card" }
   ]
 }
@@ -242,7 +242,44 @@ Returns the list of available payment methods supported by the backend.
 
 ---
 
-### 6. Validate Payment Details
+### 6. PayMongo Capabilities (Diagnostic)
+
+**GET** `/api/payments/capabilities`
+
+Returns PayMongo merchant payment method capabilities (sanitized). Use this to confirm whether `dob` (Direct Online Banking) is enabled for the merchant.
+
+#### Optional authentication
+
+If the backend has `DIAGNOSTIC_TOKEN` set, include an `x-diagnostic-token` header matching that value.
+
+#### Example (curl)
+
+```bash
+curl -sS https://api.nexistrydigitalsolutions.com/api/payments/capabilities
+```
+
+With token:
+
+```bash
+curl -sS https://api.nexistrydigitalsolutions.com/api/payments/capabilities \
+  -H "x-diagnostic-token: YOUR_DIAGNOSTIC_TOKEN"
+```
+
+#### Response (example)
+
+```json
+{
+  "success": true,
+  "count": 6,
+  "capabilities": [
+    { "id": "pm_xxx", "type": "payment_method", "methodType": "dob", "status": "enabled", "brand": null, "country": "PH" }
+  ]
+}
+```
+
+---
+
+### 7. Validate Payment Details
 
 **POST** `/api/payments/validate`
 
@@ -279,7 +316,7 @@ Validates payment form data before submission.
 
 ---
 
-### 7. Health Check
+### 8. Health Check
 
 **GET** `/health`
 
@@ -297,7 +334,7 @@ Returns the health status of the API.
 
 ---
 
-### 8. Root Endpoint (API Info)
+### 9. Root Endpoint (API Info)
 
 **GET** `/`
 
@@ -313,6 +350,7 @@ Returns basic API information and available endpoints.
     "createPayment": "/api/payments/create-payment-intent",
     "paymentWebhook": "/api/payments/webhook",
     "checkStatus": "/api/payments/status/:id",
+    "paymongoCapabilities": "/api/payments/capabilities",
     "health": "/health"
   }
 }
@@ -345,6 +383,8 @@ To integrate your system with this backend, the following configurations must be
 |----------|----------|-------------|
 | `PAYMONGO_SECRET_KEY` | Yes | PayMongo API secret key (sk_...) |
 | `TAX_RATE` | Yes | Tax rate as decimal (e.g., `0.10` for 10%) |
+| `PAYMONGO_FILTER_METHOD_TYPES` | No | Set to `true` to filter checkout methods using PayMongo merchant capabilities |
+| `DIAGNOSTIC_TOKEN` | No | If set, requires `x-diagnostic-token` for `/api/payments/capabilities` |
 
 #### CORS Configuration
 

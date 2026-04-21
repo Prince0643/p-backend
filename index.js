@@ -68,6 +68,7 @@ app.get('/', (req, res) => {
             createPayment: '/api/payments/create-payment-intent',
             paymentWebhook: '/api/payments/webhook',
             checkStatus: '/api/payments/status/:id',
+            paymongoCapabilities: '/api/payments/capabilities',
             clockistryPayment: '/api/clockistry/create-payment-intent',
             health: '/health'
         }

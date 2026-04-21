@@ -21,6 +21,9 @@ router.post('/retry/:paymentId', paymentController.retryPayment);
 // Get payment methods
 router.get('/methods', paymentController.getPaymentMethods);
 
+// Diagnostic: PayMongo merchant payment method capabilities (sanitized)
+router.get('/capabilities', paymentController.getPaymongoCapabilities);
+
 // Validate payment details
 router.post('/validate', paymentController.validatePayment);
 

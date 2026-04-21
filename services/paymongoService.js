@@ -27,14 +27,42 @@ class PayMongoService {
     async getMerchantPaymentMethodCapabilities() {
         try {
             const response = await this.client.get('/merchants/capabilities/payment_methods');
-            const data = response?.data?.data;
-            if (!Array.isArray(data)) {
-                const topLevelKeys = response?.data && typeof response.data === 'object'
-                    ? Object.keys(response.data)
-                    : [];
-                throw new Error(`Unexpected PayMongo capabilities response shape (expected data[]). Keys: ${topLevelKeys.join(',') || 'none'}`);
+            const contentType = response?.headers?.['content-type'];
+
+            // PayMongo usually responds with { data: [...] }, but be defensive:
+            // - Some environments/proxies might return the array directly
+            // - Non-JSON responses may be returned as Buffer/string
+            const raw = response?.data;
+
+            if (Array.isArray(raw)) {
+                return raw;
             }
-            return data;
+
+            if (raw && typeof raw === 'object' && Array.isArray(raw.data)) {
+                return raw.data;
+            }
+
+            const asString = Buffer.isBuffer(raw)
+                ? raw.toString('utf8')
+                : (typeof raw === 'string' ? raw : null);
+
+            if (asString) {
+                try {
+                    const parsed = JSON.parse(asString);
+                    if (Array.isArray(parsed)) return parsed;
+                    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.data)) return parsed.data;
+                } catch (_) {
+                    // fall through to error
+                }
+            }
+
+            const topLevelKeys = raw && typeof raw === 'object'
+                ? Object.keys(raw)
+                : [];
+            throw new Error(
+                `Unexpected PayMongo capabilities response shape (expected data[]). ` +
+                `content-type=${contentType || 'unknown'} keys=${topLevelKeys.join(',') || 'none'}`
+            );
         } catch (error) {
             console.error('PayMongo merchant capabilities error:', error.response?.data || error.message);
             throw new Error(error.message || 'Failed to retrieve merchant payment method capabilities');

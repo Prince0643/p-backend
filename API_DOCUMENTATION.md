@@ -83,8 +83,7 @@ Creates a new payment intent and returns a checkout URL for the customer to comp
 | `grabpay` | GrabPay E-Wallet | E-Wallet |
 | `maya` | Maya E-Wallet | E-Wallet |
 | `shopeepay` | ShopeePay E-Wallet | E-Wallet |
-| `bpi` | BPI Online Banking | Bank |
-| `unionbank` | UnionBank Online | Bank |
+| `dob` | Online Banking (bank list shown by PayMongo at checkout) | Bank |
 | `card` | Credit/Debit Card | Card |
 
 #### Available Products

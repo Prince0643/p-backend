@@ -187,6 +187,7 @@ exports.createPaymentIntent = async (req, res) => {
             'shopeepay': 'shopee_pay',
             'bpi': 'dob',
             'unionbank': 'dob',
+            'dob': 'dob',
             'qrph': 'qrph',
             'card': 'card'
         };
@@ -438,8 +439,8 @@ exports.getPaymentMethods = (req, res) => {
             { id: 'grabpay', name: 'GrabPay', icon: 'grab-icon.png', category: 'ewallet' },
             { id: 'maya', name: 'Maya', icon: 'maya-icon.png', category: 'ewallet' },
             { id: 'shopeepay', name: 'ShopeePay', icon: 'shopee-icon.png', category: 'ewallet' },
-            { id: 'bpi', name: 'BPI Online', icon: 'bpi-icon.png', category: 'bank' },
-            { id: 'unionbank', name: 'UnionBank Online', icon: 'unionbank-icon.png', category: 'bank' },
+            // PayMongo renders the actual bank list dynamically under `dob` (Direct Online Banking).
+            { id: 'dob', name: 'Online Banking', icon: 'online-banking-icon.png', category: 'bank' },
             { id: 'card', name: 'Credit/Debit Card', icon: 'card-icon.png', category: 'card' }
         ]
     });

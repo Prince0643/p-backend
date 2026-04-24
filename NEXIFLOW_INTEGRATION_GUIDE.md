@@ -9,6 +9,8 @@ This document explains how Nexiflow should integrate with the Nexistry PayMongo 
 The PayMongo Backend has been configured to support Clockistry/Nexiflow subscription payments with the following features:
 - Dedicated endpoint for creating subscription payment intents
 - Dynamic pricing based on plan (Office/Enterprise) and user count
+- Optional payment method selection (or show all) for PayMongo Checkout
+- Expanded PayMongo payment method types (matches `/api/payments` behavior)
 - Automatic webhook forwarding to Nexiflow backend
 - GHL integration is bypassed for Clockistry payments
 
@@ -32,6 +34,7 @@ Creates a PayMongo checkout session for subscription upgrades.
   "userId": "uuid-string",
   "plan": "office",
   "userCount": 5,
+  "paymentMethod": "all",
   "successUrl": "https://nexiflow-new.nexistrydigitalsolutions.com/billing/success",
   "cancelUrl": "https://nexiflow-new.nexistrydigitalsolutions.com/billing/cancel",
   "customerEmail": "user@company.com",
@@ -45,6 +48,7 @@ Creates a PayMongo checkout session for subscription upgrades.
 | `userId` | string | No | User ID who initiated the upgrade |
 | `plan` | string | Yes | `"office"` or `"enterprise"` |
 | `userCount` | number | No | Number of users (default: 1) |
+| `paymentMethod` | string | No | Which PayMongo method to show (defaults to showing all supported methods). See “Payment Methods” below. |
 | `successUrl` | string | No | Custom success redirect URL |
 | `cancelUrl` | string | No | Custom cancel redirect URL |
 | `customerEmail` | string | No | Customer email for receipt |
@@ -70,6 +74,49 @@ Creates a PayMongo checkout session for subscription upgrades.
 | `transactionId` | Internal transaction reference (CLK-XXXXXX) |
 | `amount` | Total amount in centavos |
 | `currency` | Currency code (PHP) |
+
+---
+
+## Payment Methods
+
+Clockistry/Nexiflow uses **PayMongo Checkout Sessions**. The backend can either:
+- **Show all supported methods** in the PayMongo checkout page, or
+- **Restrict checkout to one method** (when the UI wants the user to pick a method first).
+
+### How to choose a method from Nexiflow
+
+Send `paymentMethod` in the request body:
+
+- `"all"` or `"qrph"` or omitted → show **all** supported methods
+- One of the specific options below → show **only that** method
+
+### Supported `paymentMethod` values (Nexiflow → PayMongo)
+
+| Nexiflow `paymentMethod` | PayMongo `payment_method_types` |
+|---|---|
+| `gcash` | `gcash` |
+| `grabpay` | `grab_pay` |
+| `maya` | `paymaya` |
+| `shopeepay` | `shopee_pay` |
+| `bpi` | `dob` |
+| `unionbank` | `dob_ubp` |
+| `dob` | `dob` |
+| `dob_ubp` | `dob_ubp` |
+| `qrph` | `qrph` |
+| `card` | `card` |
+| `all` | all supported methods |
+
+### Supported method set (PayMongo Checkout)
+
+When showing all methods, the backend offers this list:
+
+`qrph`, `gcash`, `grab_pay`, `paymaya`, `shopee_pay`, `dob`, `dob_ubp`, `card`
+
+### Optional: filter by PayMongo merchant capabilities
+
+If the backend env var `PAYMONGO_FILTER_METHOD_TYPES=true`, the backend will call PayMongo merchant capabilities and **filter out unsupported methods** so the checkout page doesn’t show options your PayMongo account can’t use.
+
+If capability filtering removes all methods (unexpected), it falls back to `qrph`.
 
 ---
 
@@ -115,7 +162,8 @@ The backend will automatically forward PayMongo webhooks to your Nexiflow webhoo
     "internal_transaction_id": "CLK-XXXXXX",
     "source": "clockistry",
     "customer_email": "user@company.com",
-    "customer_name": "John Doe"
+    "customer_name": "John Doe",
+    "payment_method": "all"
   },
   "paidAt": "2026-03-12T14:30:00Z"
 }
@@ -123,11 +171,13 @@ The backend will automatically forward PayMongo webhooks to your Nexiflow webhoo
 
 ### Event Types
 
-| Event Type | Description | Action Required |
-|------------|-------------|-----------------|
-| `checkout_session.payment.paid` | Payment successful | Upgrade company plan, provision seats |
-| `payment.failed` | Payment failed | Mark transaction failed, notify user |
-| `payment.cancelled` | Payment cancelled | Mark transaction cancelled |
+The PayMongo backend forwards PayMongo’s event type string as `eventType`. Treat it as an **opaque string** and match it using “contains” rules (recommended) so you don’t break if PayMongo introduces new variants.
+
+| `eventType` contains | Meaning | Action Required |
+|---|---|---|
+| `paid` | Payment successful | Upgrade company plan, provision seats |
+| `failed` | Payment failed | Mark transaction failed, notify user |
+| `cancel` / `expired` | Checkout abandoned/cancelled | Mark transaction cancelled/expired |
 
 ### Important Metadata Fields
 
@@ -138,6 +188,7 @@ The backend will automatically forward PayMongo webhooks to your Nexiflow webhoo
 | `user_count` | Number of seats to provision |
 | `internal_transaction_id` | Your internal reference (CLK-XXXXXX) |
 | `source` | Always "clockistry" for your payments |
+| `payment_method` | What method Nexiflow requested (if provided) |
 
 ---
 
@@ -156,6 +207,7 @@ const response = await fetch('https://api.nexistrydigitalsolutions.com/api/clock
     userId: 'user-uuid',
     plan: 'office', // or 'enterprise'
     userCount: 5,
+    paymentMethod: 'all', // or 'gcash' | 'grabpay' | 'maya' | 'shopeepay' | 'bpi' | 'unionbank' | 'dob' | 'dob_ubp' | 'qrph' | 'card'
     customerEmail: 'admin@company.com',
     customerName: 'John Doe'
   })
@@ -178,12 +230,24 @@ app.post('/api/billing/webhook', async (req, res) => {
   
   // Verify it's from the PayMongo backend (optional: check X-Webhook-Secret header)
   
-  if (eventType === 'checkout_session.payment.paid') {
+  if (String(eventType || '').includes('paid')) {
     // Upgrade the company plan
     await upgradeCompanyPlan({
       companyId: metadata.company_id,
       plan: metadata.pricing_level,
       userCount: parseInt(metadata.user_count),
+      transactionId: metadata.internal_transaction_id,
+      checkoutSessionId
+    });
+  } else if (String(eventType || '').includes('failed')) {
+    await markUpgradeFailed({
+      companyId: metadata.company_id,
+      transactionId: metadata.internal_transaction_id,
+      checkoutSessionId
+    });
+  } else if (String(eventType || '').includes('cancel') || String(eventType || '').includes('expired')) {
+    await markUpgradeCancelled({
+      companyId: metadata.company_id,
       transactionId: metadata.internal_transaction_id,
       checkoutSessionId
     });

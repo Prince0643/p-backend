@@ -1,6 +1,8 @@
 // controllers/clockistryController.js
 const axios = require('axios');
+const paymongoService = require('../services/paymongoService');
 const { generateId } = require('../utils/helpers');
+const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 
 // Pricing configuration
 const USD_TO_PHP_RATE = 58;
@@ -23,7 +25,8 @@ exports.createPaymentIntent = async (req, res) => {
             successUrl,
             cancelUrl,
             customerEmail,
-            customerName
+            customerName,
+            paymentMethod
         } = req.body;
 
         // Validate required fields
@@ -50,6 +53,13 @@ exports.createPaymentIntent = async (req, res) => {
         // Generate internal transaction ID
         const internalTransactionId = generateId('CLK');
 
+        const enableCapabilityFilter = String(process.env.PAYMONGO_FILTER_METHOD_TYPES || '').toLowerCase() === 'true';
+        const checkoutMethodTypes = await getCheckoutMethodTypes({
+            paymentMethod,
+            paymongoService,
+            enableCapabilityFilter
+        });
+
         // Create PayMongo checkout session directly
         const response = await axios.post(
             'https://api.paymongo.com/v1/checkout_sessions',
@@ -63,7 +73,7 @@ exports.createPaymentIntent = async (req, res) => {
                             description: `Subscription for ${count} user(s)`,
                             quantity: 1
                         }],
-                        payment_method_types: ['card', 'gcash', 'qrph', 'grab_pay'],
+                        payment_method_types: checkoutMethodTypes,
                         success_url: successUrl || 'https://nexi-flow.com/billing/success',
                         cancel_url: cancelUrl || 'https://nexi-flow.com/billing/cancel',
                         description: `Upgrade to ${plan} plan`,
@@ -79,7 +89,8 @@ exports.createPaymentIntent = async (req, res) => {
                             internal_transaction_id: internalTransactionId,
                             source: 'clockistry',
                             customer_email: customerEmail || '',
-                            customer_name: customerName || ''
+                            customer_name: customerName || '',
+                            payment_method: String(paymentMethod || '')
                         }
                     }
                 }

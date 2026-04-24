@@ -4,6 +4,7 @@ const webhookService = require('../services/webhookService');
 const ghlService = require('../services/ghlService');
 const clockistryController = require('./clockistryController');
 const { generateId, validateEmail, validateMobile, calculateTaxedAmount } = require('../utils/helpers');
+const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 
 // Product pricing mapping
 const PRODUCTS = {
@@ -178,63 +179,15 @@ exports.createPaymentIntent = async (req, res) => {
         // To show the e-wallet + online banking list (GCash/GrabPay/Maya/ShopeePay/BPI/UnionBank),
         // you must include those method types in the checkout session.
         const selectedPaymentMethod = paymentMethod || 'qrph';
+        const enableCapabilityFilter = String(process.env.PAYMONGO_FILTER_METHOD_TYPES || '').toLowerCase() === 'true';
 
-        // Map frontend payment method IDs to PayMongo identifiers
-        const methodMap = {
-            'gcash': 'gcash',
-            'grabpay': 'grab_pay',
-            'maya': 'paymaya',
-            'shopeepay': 'shopee_pay',
-            'bpi': 'dob',
-            // UnionBank is a separate DOB capability for some merchants.
-            'unionbank': 'dob_ubp',
-            'dob': 'dob',
-            'dob_ubp': 'dob_ubp',
-            'qrph': 'qrph',
-            'card': 'card'
-        };
+        const paymentMethods = await getCheckoutMethodTypes({
+            paymentMethod: selectedPaymentMethod,
+            paymongoService,
+            enableCapabilityFilter
+        });
 
-        const allSupportedPaymongoMethods = [
-            'qrph',
-            'gcash',
-            'grab_pay',
-            'paymaya',
-            'shopee_pay',
-            'dob',
-            'dob_ubp'
-        ];
-
-        const normalized = methodMap[selectedPaymentMethod] || 'qrph';
-
-        // If the user didn’t pick a specific method (or picked qrph/all), show all options.
-        let paymentMethods = (selectedPaymentMethod === 'qrph' || selectedPaymentMethod === 'all')
-            ? allSupportedPaymongoMethods
-            : [normalized];
-
-        // Optional: Filter method types using PayMongo merchant capabilities.
-        // This can prevent offering options that the merchant/account doesn't support (e.g. DOB banks like UnionBank).
-        // Enable by setting PAYMONGO_FILTER_METHOD_TYPES=true
-        if (String(process.env.PAYMONGO_FILTER_METHOD_TYPES || '').toLowerCase() === 'true') {
-            try {
-                const capabilities = await paymongoService.getMerchantPaymentMethodCapabilities();
-                const allowed = new Set((capabilities || []).map(pm => pm?.attributes?.type).filter(Boolean));
-                console.log('PayMongo allowed method types:', Array.from(allowed));
-                console.log('Payment methods before filtering:', paymentMethods);
-
-                const filtered = paymentMethods.filter(m => allowed.has(m));
-                console.log('Payment methods after filtering:', filtered);
-                if (filtered.length > 0) {
-                    paymentMethods = filtered;
-                } else {
-                    console.log('All methods filtered out, falling back to qrph');
-                    paymentMethods = ['qrph'];
-                }
-            } catch (capErr) {
-                console.log('Non-fatal: unable to fetch PayMongo capabilities, proceeding without filtering:', capErr.message);
-            }
-        }
-
-        console.log('Payment method selected:', selectedPaymentMethod, '-> PayMongo:', normalized, 'checkout types:', paymentMethods);
+        console.log('Payment method selected:', selectedPaymentMethod, 'checkout types:', paymentMethods);
 
         const coreSuccessUrlDefault = 'https://nexistrycoreph.nexistrydigitalsolutions.com/product-thank-you-page-703324-971918-441701';
         const successUrl = (source === 'nexistry_core_ph')

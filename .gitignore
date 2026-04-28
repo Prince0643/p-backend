@@ -81,6 +81,11 @@ jspm_packages/
 
 # Gatsby build output
 public/
+!public/admin/
+!public/admin/products/
+!public/admin/products/index.html
+!public/admin/products/app.js
+!public/admin/products/styles.css
 
 # Vuepress build output
 .vuepress/dist
@@ -191,6 +196,7 @@ dump.rdb
 
 # MongoDB data
 data/
+!data/products.json
 mongodb-data/
 
 # PostgreSQL data

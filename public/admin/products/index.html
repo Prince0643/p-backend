@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nexistry Backend - Products</title>
+  <link rel="stylesheet" href="/public/admin/products/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container">
+      <div class="brand">
+        <div class="brand__title">Nexistry Backend</div>
+        <div class="brand__subtitle">Product Catalog + HTML Snippet Generator</div>
+      </div>
+      <div class="topbar__actions">
+        <button id="setKeyBtn" class="btn btn--ghost">Set API Key</button>
+        <button id="refreshBtn" class="btn btn--ghost">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container layout">
+    <section class="panel">
+      <div class="panel__header">
+        <h2>Products</h2>
+        <div class="row">
+          <input id="searchInput" class="input" placeholder="Search products…" />
+          <button id="newBtn" class="btn">New Product</button>
+        </div>
+      </div>
+      <div id="productsList" class="list"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__header">
+        <h2 id="formTitle">New Product</h2>
+        <div class="row">
+          <button id="deleteBtn" class="btn btn--danger hidden">Delete</button>
+          <button id="resetBtn" class="btn btn--ghost">Reset</button>
+        </div>
+      </div>
+
+      <form id="productForm" class="form">
+        <div class="grid">
+          <label class="field">
+            <div class="field__label">ID (slug)</div>
+            <input id="idInput" class="input" placeholder="e.g. ghl_practice_access" />
+            <div class="field__hint">Leave blank to auto-generate from name.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Name (backend validation)</div>
+            <input id="nameInput" class="input" required placeholder="e.g. GHL Practice Access" />
+          </label>
+          <label class="field">
+            <div class="field__label">Amount (PHP)</div>
+            <input id="amountInput" class="input" type="number" min="1" step="0.01" required placeholder="e.g. 500" />
+          </label>
+          <label class="field">
+            <div class="field__label">Default tax rate</div>
+            <input id="taxRateInput" class="input" type="number" min="0" max="1" step="0.01" placeholder="e.g. 0.10" />
+            <div class="field__hint">Used for snippet generation only.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Default payment method</div>
+            <input id="paymentMethodInput" class="input" placeholder="e.g. qrph or all" />
+          </label>
+          <label class="field">
+            <div class="field__label">Default source</div>
+            <input id="sourceInput" class="input" placeholder="e.g. ghl_practice_access" />
+          </label>
+          <label class="field">
+            <div class="field__label">Display suffix</div>
+            <input id="suffixInput" class="input" placeholder="e.g. /month" />
+            <div class="field__hint">Label only; backend charges one-time per checkout.</div>
+          </label>
+        </div>
+
+        <div class="row row--end">
+          <button type="submit" class="btn">Save Product</button>
+        </div>
+      </form>
+
+      <div class="panel__divider"></div>
+
+      <div class="panel__header">
+        <h2>Generated HTML Snippet</h2>
+        <div class="row">
+          <button id="copySnippetBtn" class="btn btn--ghost">Copy</button>
+        </div>
+      </div>
+      <div class="field">
+        <div class="field__label">Backend URL</div>
+        <input id="backendUrlInput" class="input" value="https://api.nexistrydigitalsolutions.com" />
+      </div>
+      <textarea id="snippetBox" class="textarea" readonly placeholder="Save a product to generate a snippet…"></textarea>
+      <div id="toast" class="toast hidden"></div>
+    </section>
+  </main>
+
+  <script src="/public/admin/products/app.js"></script>
+</body>
+</html>
+

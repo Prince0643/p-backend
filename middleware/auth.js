@@ -19,6 +19,25 @@ const validateApiKey = (req, res, next) => {
     next();
 };
 
+// Admin API key authentication (falls back to API_KEY if not set)
+const validateAdminApiKey = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey) {
+        return res.status(401).json({ error: 'API key required' });
+    }
+
+    const validKey = process.env.ADMIN_API_KEY || process.env.API_KEY;
+    if (!validKey) {
+        return res.status(500).json({ error: 'Admin API key is not configured' });
+    }
+
+    if (apiKey !== validKey) {
+        return res.status(403).json({ error: 'Invalid API key' });
+    }
+
+    next();
+};
+
 // Rate limiting by user
 const userRateLimit = new Map();
 
@@ -65,6 +84,7 @@ const validateOrigin = (req, res, next) => {
 
 module.exports = {
     validateApiKey,
+    validateAdminApiKey,
     rateLimitByUser,
     validateOrigin
 };

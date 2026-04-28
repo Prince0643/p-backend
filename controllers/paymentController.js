@@ -5,27 +5,15 @@ const ghlService = require('../services/ghlService');
 const clockistryController = require('./clockistryController');
 const { generateId, validateEmail, validateMobile, calculateTaxedAmount } = require('../utils/helpers');
 const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
+const { findProduct } = require('../utils/productCatalog');
 
-// Product pricing mapping
-const PRODUCTS = {
-    'START UP VA Course': { amount: 1500, currency: 'PHP' },
-    'GHL Practice Access': { amount: 500, currency: 'PHP' },
-    'Freelancer Plan': { amount: 3500, currency: 'PHP' },
-    'Dedicated Coaching': { amount: 999, currency: 'PHP' },
-    'Customization Plan': { amount: 5000, currency: 'PHP' },
-    'Client Finder Tool': { amount: 500, currency: 'PHP' },
-    'Customized Coaching + OJT': { amount: 1990, currency: 'PHP' },
-    '500 AI Prompts': { amount: 500, currency: 'PHP' },
-    'Starter Plan': { amount: 5000, currency: 'PHP' },
-    'Flexible Plan': { amount: 7000, currency: 'PHP' },
-    'Flexible Plan with AI-Add On': { amount: 15000, currency: 'PHP' },
-    'Flexible Plan with AI-Add On and Third-Party Integration': { amount: 20800, currency: 'PHP' },
-    'Flexible Plan with Third-Party Integration': { amount: 12800, currency: 'PHP' },
-    'Premium Plan': { amount: 10000, currency: 'PHP' },
-    'Premium Plan with AI-Add On': { amount: 19200, currency: 'PHP' },
-    'Premium Plan with AI-Add On and Third Party Integration': { amount: 25000, currency: 'PHP' },
-    'Premium Plan with Third-Party Integration': { amount: 17000, currency: 'PHP' }
-};
+function resolveCatalogProduct({ productId, productName }) {
+    const byId = productId ? findProduct({ productId }) : null;
+    if (byId) return byId;
+    const byName = productName ? findProduct({ productName }) : null;
+    if (byName) return byName;
+    return null;
+}
 
 // Create payment intent
 exports.createPaymentIntent = async (req, res) => {
@@ -36,6 +24,7 @@ exports.createPaymentIntent = async (req, res) => {
             email,
             mobile,
             product,
+            productId,
             notes,
             businessName,
             setupType,
@@ -52,13 +41,13 @@ exports.createPaymentIntent = async (req, res) => {
             metadata = {}
         } = req.body;
 
-        const normalizedProduct = String(product || '').trim();
+        let normalizedProduct = String(product || '').trim();
 
         // Validate required fields
-        if (!fullName || !email || !mobile || !normalizedProduct) {
+        if (!fullName || !email || !mobile || (!productId && !normalizedProduct)) {
             return res.status(400).json({
                 error: 'Missing required fields',
-                required: ['fullName', 'email', 'mobile', 'product']
+                required: ['fullName', 'email', 'mobile', 'productId (or product)']
             });
         }
 
@@ -72,11 +61,13 @@ exports.createPaymentIntent = async (req, res) => {
             return res.status(400).json({ error: 'Invalid mobile number format' });
         }
 
-        // Get product amount - Use frontend amount if provided (with discount), otherwise use product mapping
-        const productInfo = PRODUCTS[normalizedProduct];
-        if (!productInfo) {
-            return res.status(400).json({ error: 'Invalid product' });
+        // Product lookup (catalog-backed)
+        const catalogProduct = resolveCatalogProduct({ productId, productName: normalizedProduct });
+        if (!catalogProduct) {
+            return res.status(400).json({ error: 'Invalid product. Add it in /admin/products first.' });
         }
+        if (!normalizedProduct) normalizedProduct = catalogProduct.name;
+        const productInfo = { amount: catalogProduct.amountPhp, currency: catalogProduct.currency };
 
         // Generate unique payment reference
         const paymentReference = generateId('PAY');
@@ -111,6 +102,16 @@ exports.createPaymentIntent = async (req, res) => {
             finalAmount = Number(taxed.totalAmount.toFixed(2));
             baseAmount = Number(taxed.baseAmount.toFixed(2));
             taxAmount = Number(taxed.taxAmount.toFixed(2));
+        }
+
+        // Safety: prevent accidental overcharge beyond catalog price (+ tax)
+        const maxAllowed = Number(calculateTaxedAmount(productInfo.amount, taxRate).totalAmount.toFixed(2));
+        if (finalAmount > maxAllowed) {
+            return res.status(400).json({
+                error: 'Amount exceeds product catalog maximum',
+                maxAllowed,
+                requested: finalAmount
+            });
         }
 
         // Log what we received for debugging

@@ -59,7 +59,8 @@ Creates a new payment intent and returns a checkout URL for the customer to comp
 | `fullName` | string | Yes | Customer's full name |
 | `email` | string | Yes | Customer's email address |
 | `mobile` | string | Yes | Customer's mobile number (Philippine format) |
-| `product` | string | Yes | Product name (see [Available Products](#available-products)) |
+| `productId` | string | Yes* | Product ID from the backend catalog (recommended) |
+| `product` | string | Yes* | Product name from the backend catalog (legacy) |
 | `paymentMethod` | string | No | Preferred payment method (default: `qrph`) |
 | `source` | string | No | Source identifier for tracking (default: `nexistry_academy`) |
 | `amount` | number | No | Custom amount (overrides product price, useful for discounts) |
@@ -98,6 +99,8 @@ Creates a new payment intent and returns a checkout URL for the customer to comp
 | `Customization Plan` | 5,000.00 |
 | `Client Finder Tool` | 500.00 |
 | `Customized Coaching + OJT` | 1,990.00 |
+
+> Note: Products are now catalog-backed. Add/edit products via the admin UI (`/admin/products`) or the admin API, then use the generated snippet on your HTML pages.
 
 #### Response
 

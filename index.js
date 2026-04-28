@@ -8,6 +8,7 @@ const path = require('path');
 
 const paymentRoutes = require('./routes/payments');
 const clockistryRoutes = require('./routes/clockistry');
+const adminProductRoutes = require('./routes/adminProducts');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -49,6 +50,12 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 // Routes
 app.use('/api/payments', paymentRoutes);
 app.use('/api/clockistry', clockistryRoutes);
+app.use('/api/admin', adminProductRoutes);
+
+// Admin UI entry (served from /public)
+app.get('/admin/products', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin', 'products', 'index.html'));
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {

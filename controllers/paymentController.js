@@ -205,7 +205,12 @@ exports.createPaymentIntent = async (req, res) => {
         // `payment_method_allowed` field. Keep a conservative allowlist for PaymentIntent, while
         // still offering the full set in Checkout Session `payment_method_types`.
         const checkoutMethodTypes = paymentMethods;
-        const paymentIntentAllowed = paymentMethods.map(m => (m === 'dob_ubp' ? 'dob' : m));
+        const paymentIntentAllowed = paymentMethods
+            // PayMongo PaymentIntent `payment_method_allowed` does not accept brankas_* capability identifiers.
+            // These are only attempted in Checkout Session `payment_method_types` behind a feature flag.
+            .filter((m) => !String(m).startsWith('brankas_'))
+            // Normalize UBP capability to DOB for PaymentIntent allowlist.
+            .map((m) => (m === 'dob_ubp' ? 'dob' : m));
 
         const paymentIntent = await paymongoService.createPaymentIntent({
             amount: finalAmount,

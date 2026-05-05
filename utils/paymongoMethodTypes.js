@@ -62,7 +62,14 @@ async function getCheckoutMethodTypes({
 
         try {
             const capabilities = await paymongoService.getMerchantPaymentMethodCapabilities();
-            const allowed = new Set((capabilities || []).map(pm => pm?.attributes?.type).filter(Boolean));
+            const allowed = new Set(
+                (capabilities || [])
+                    .map((pm) => {
+                        if (typeof pm === 'string') return pm;
+                        return pm?.attributes?.type;
+                    })
+                    .filter(Boolean)
+            );
 
             const filtered = methodTypes.filter(m => allowed.has(m));
             if (filtered.length > 0) {

@@ -448,19 +448,50 @@ exports.retryPayment = async (req, res) => {
 };
 
 // Get payment methods
-exports.getPaymentMethods = (req, res) => {
-    res.status(200).json({
-        methods: [
-            { id: 'qrph', name: 'QRPh (All Methods)', icon: 'qrph-icon.png', category: 'qr' },
-            { id: 'gcash', name: 'GCash', icon: 'gcash-icon.png', category: 'ewallet' },
-            { id: 'grabpay', name: 'GrabPay', icon: 'grab-icon.png', category: 'ewallet' },
-            { id: 'maya', name: 'Maya', icon: 'maya-icon.png', category: 'ewallet' },
-            { id: 'shopeepay', name: 'ShopeePay', icon: 'shopee-icon.png', category: 'ewallet' },
-            // PayMongo renders the actual bank list dynamically under `dob` (Direct Online Banking).
-            { id: 'dob', name: 'Online Banking', icon: 'online-banking-icon.png', category: 'bank' },
-            { id: 'card', name: 'Credit/Debit Card', icon: 'card-icon.png', category: 'card' }
-        ]
-    });
+exports.getPaymentMethods = async (req, res) => {
+    const methods = [
+        { id: 'qrph', name: 'QRPh (All Methods)', icon: 'qrph-icon.png', category: 'qr' },
+        { id: 'gcash', name: 'GCash', icon: 'gcash-icon.png', category: 'ewallet' },
+        { id: 'grabpay', name: 'GrabPay', icon: 'grab-icon.png', category: 'ewallet' },
+        { id: 'maya', name: 'Maya', icon: 'maya-icon.png', category: 'ewallet' },
+        { id: 'shopeepay', name: 'ShopeePay', icon: 'shopee-icon.png', category: 'ewallet' },
+        // PayMongo renders the actual bank list dynamically under `dob` (Direct Online Banking).
+        { id: 'dob', name: 'Online Banking', icon: 'online-banking-icon.png', category: 'bank' },
+        { id: 'card', name: 'Credit/Debit Card', icon: 'card-icon.png', category: 'card' }
+    ];
+
+    const enableCapabilityFilter = String(process.env.PAYMONGO_FILTER_METHOD_TYPES || '').toLowerCase() === 'true';
+    if (!enableCapabilityFilter) {
+        return res.status(200).json({ methods });
+    }
+
+    try {
+        const capabilities = await paymongoService.getMerchantPaymentMethodCapabilities();
+        const allowed = new Set((capabilities || []).map(pm => pm?.attributes?.type).filter(Boolean));
+
+        const idToCapabilityTypes = {
+            qrph: ['qrph'],
+            gcash: ['gcash'],
+            grabpay: ['grab_pay'],
+            maya: ['paymaya'],
+            shopeepay: ['shopee_pay'],
+            // If either `dob` or `dob_ubp` is enabled, keep "Online Banking" visible.
+            dob: ['dob', 'dob_ubp'],
+            card: ['card']
+        };
+
+        const filtered = methods.filter((m) => {
+            const types = idToCapabilityTypes[m.id] || [];
+            return types.some((t) => allowed.has(t));
+        });
+
+        return res.status(200).json({
+            methods: filtered.length > 0 ? filtered : [{ id: 'qrph', name: 'QRPh (All Methods)', icon: 'qrph-icon.png', category: 'qr' }]
+        });
+    } catch (err) {
+        console.log('Non-fatal: unable to fetch PayMongo capabilities for /methods, returning full list:', err.message);
+        return res.status(200).json({ methods });
+    }
 };
 
 // Validate payment details

@@ -108,6 +108,11 @@ Set at least:
 - `FRONTEND_CANCEL_URL=...`
 - `PORT=3000` (or whatever your app uses)
 
+Optional:
+
+- `PAYMONGO_FILTER_METHOD_TYPES=true` (filters checkout/payment method list based on PayMongo merchant capabilities)
+- `DIAGNOSTIC_TOKEN=...` (protects diagnostic endpoints like `/api/payments/capabilities` via `x-diagnostic-token` header)
+
 Notes:
 
 - Do **not** commit `.env`.

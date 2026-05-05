@@ -15,7 +15,7 @@
     { "id": "flexible_plan_ai_add_on_third_party", "name": "Flexible Plan with AI-Add On and Third-Party Integration", "amountPhp": 20800, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
     { "id": "flexible_plan_third_party", "name": "Flexible Plan with Third-Party Integration", "amountPhp": 12800, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
     { "id": "premium_plan", "name": "Premium Plan", "amountPhp": 10000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "premium_plan_ai_add_on", "name": "Premium Plan with AI-Add On", "amountPhp": 19200, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
+    { "id": "premium_plan_ai_add_on", "name": "Premium Plan with AI-Add On", "amountPhp": 20000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
     { "id": "premium_plan_ai_add_on_third_party", "name": "Premium Plan with AI-Add On and Third Party Integration", "amountPhp": 25000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
     { "id": "premium_plan_third_party", "name": "Premium Plan with Third-Party Integration", "amountPhp": 17000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } }
   ]

@@ -77,6 +77,16 @@ async function getCheckoutMethodTypes({
             } else {
                 methodTypes = [...fallback];
             }
+
+            // Optional experiment: include Brankas-specific capability identifiers in Checkout Session
+            // `payment_method_types` (may be rejected by PayMongo Checkout; service has a retry fallback).
+            const enableBrankasCheckoutTypes = String(process.env.PAYMONGO_CHECKOUT_ENABLE_BRANKAS_TYPES || '').toLowerCase() === 'true';
+            if (enableBrankasCheckoutTypes && (selected === 'qrph' || selected === 'all')) {
+                const brankasTypes = Array.from(allowed).filter((t) => String(t).startsWith('brankas_'));
+                if (brankasTypes.length > 0) {
+                    methodTypes = Array.from(new Set([...methodTypes, ...brankasTypes]));
+                }
+            }
         } catch (capErr) {
             // Non-fatal: proceed without filtering.
             console.log('Non-fatal: unable to fetch PayMongo capabilities, proceeding without filtering:', capErr.message);

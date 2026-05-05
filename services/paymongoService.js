@@ -132,8 +132,7 @@ class PayMongoService {
 
             // Step 2: Create checkout session
             console.log('3. Creating checkout session...');
-
-            const checkoutResponse = await this.client.post('/checkout_sessions', {
+            const checkoutPayload = {
                 data: {
                     attributes: {
                         send_email_receipt: true,
@@ -156,7 +155,37 @@ class PayMongoService {
                         cancel_url: resolvedCancelUrl
                     }
                 }
-            });
+            };
+
+            let checkoutResponse;
+            try {
+                checkoutResponse = await this.client.post('/checkout_sessions', checkoutPayload);
+            } catch (err) {
+                const types = checkoutPayload?.data?.attributes?.payment_method_types || [];
+                const hasBrankas = Array.isArray(types) && types.some((t) => String(t).startsWith('brankas_'));
+
+                // Safe fallback: if the experimental Brankas types are rejected by Checkout,
+                // retry once with them removed.
+                if (hasBrankas) {
+                    const retryTypes = types.filter((t) => !String(t).startsWith('brankas_'));
+                    console.log('Checkout session failed with Brankas types; retrying without brankas_*:', retryTypes);
+
+                    const retryPayload = {
+                        ...checkoutPayload,
+                        data: {
+                            ...checkoutPayload.data,
+                            attributes: {
+                                ...checkoutPayload.data.attributes,
+                                payment_method_types: retryTypes.length > 0 ? retryTypes : ['qrph']
+                            }
+                        }
+                    };
+
+                    checkoutResponse = await this.client.post('/checkout_sessions', retryPayload);
+                } else {
+                    throw err;
+                }
+            }
 
             console.log('4. Checkout session created successfully');
 

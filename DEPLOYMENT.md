@@ -111,6 +111,7 @@ Set at least:
 Optional:
 
 - `PAYMONGO_FILTER_METHOD_TYPES=true` (filters checkout/payment method list based on PayMongo merchant capabilities)
+- `PAYMONGO_CHECKOUT_ENABLE_BRANKAS_TYPES=true` (experimental: include `brankas_*` types in Checkout Session `payment_method_types`; auto-falls back if rejected)
 - `DIAGNOSTIC_TOKEN=...` (protects diagnostic endpoints like `/api/payments/capabilities` via `x-diagnostic-token` header)
 
 Notes:

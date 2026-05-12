@@ -155,9 +155,8 @@ class GhlService {
         if (!Array.isArray(items) || items.length === 0) throw new Error('items is required');
 
         const startDate = String(startAt).slice(0, 10);
-        const executeAt = String(startAt).includes('T')
-            ? String(startAt)
-            : `${startDate}T00:00:00.000Z`;
+        // Some accounts validate that you must specify either `executeAt` (one-time scheduling)
+        // or `rrule` (recurring scheduling), but not both.
 
         const startDateObj = new Date(`${startDate}T00:00:00.000Z`);
         const dayOfMonth = Number(startDate.slice(8, 10));
@@ -198,7 +197,6 @@ class GhlService {
             },
             items,
             schedule: {
-                executeAt,
                 rrule: {
                     startDate,
                     intervalType: String(interval || 'month').toLowerCase() === 'month' ? 'monthly' : 'monthly',

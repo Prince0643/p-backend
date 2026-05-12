@@ -159,7 +159,7 @@ class GhlService {
         const dayOfMonth = Number(startDate.slice(8, 10));
         const computedWeek = Number.isFinite(dayOfMonth) ? Math.ceil(dayOfMonth / 7) : undefined;
         const numOfWeek = (computedWeek && computedWeek >= 1 && computedWeek <= 4) ? computedWeek : -1;
-        const dayOfWeekValues = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+        const dayOfWeekValues = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
         const dayOfWeek = Number.isFinite(startDateObj.getUTCDay())
             ? dayOfWeekValues[startDateObj.getUTCDay()]
             : undefined;

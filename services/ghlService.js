@@ -154,7 +154,7 @@ class GhlService {
         if (!startAt) throw new Error('startAt is required (YYYY-MM-DD)');
         if (!Array.isArray(items) || items.length === 0) throw new Error('items is required');
 
-        const executeAt = String(startAt).includes('T')
+        const startAtIso = String(startAt).includes('T')
             ? String(startAt)
             : `${String(startAt)}T00:00:00.000Z`;
 
@@ -188,10 +188,10 @@ class GhlService {
             },
             items,
             schedule: {
-                executeAt,
                 rrule: {
                     freq: String(interval || 'month').toLowerCase() === 'month' ? 'MONTHLY' : 'MONTHLY',
-                    interval: Number(intervalCount) || 1
+                    interval: Number(intervalCount) || 1,
+                    dtstart: startAtIso
                 }
             }
         };

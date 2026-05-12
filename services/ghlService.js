@@ -188,7 +188,7 @@ class GhlService {
             schedule: {
                 rrule: {
                     startDate,
-                    intervalType: String(interval || 'month').toLowerCase() === 'month' ? 'MONTHLY' : 'MONTHLY',
+                    intervalType: String(interval || 'month').toLowerCase() === 'month' ? 'monthly' : 'monthly',
                     interval: Number(intervalCount) || 1
                 }
             }

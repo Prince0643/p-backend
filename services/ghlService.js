@@ -149,7 +149,7 @@ class GhlService {
         return res.data;
     }
 
-    async createInvoiceSchedule({ contactId, name, currency, items, startAt, interval = 'month', intervalCount = 1 }) {
+    async createInvoiceSchedule({ contactId, contactDetails, name, currency, items, startAt, interval = 'month', intervalCount = 1 }) {
         if (!contactId) throw new Error('contactId is required');
         if (!startAt) throw new Error('startAt is required (YYYY-MM-DD)');
         if (!Array.isArray(items) || items.length === 0) throw new Error('items is required');
@@ -157,6 +157,13 @@ class GhlService {
         const executeAt = String(startAt).includes('T')
             ? String(startAt)
             : `${String(startAt)}T00:00:00.000Z`;
+
+        const normalizedPhoneNo = this.normalizePhoneE164(contactDetails?.phoneNo);
+        const normalizedContactDetails = {
+            ...(contactDetails || {}),
+            phoneNo: normalizedPhoneNo || undefined
+        };
+        Object.keys(normalizedContactDetails).forEach(k => normalizedContactDetails[k] === undefined && delete normalizedContactDetails[k]);
 
         // The schedule APIs use a nested schedule object with `executeAt` + `rrule` in responses.
         // Construct a minimal payload that matches that shape.
@@ -171,6 +178,8 @@ class GhlService {
             },
             contactDetails: {
                 id: contactId
+                ,
+                ...normalizedContactDetails
             },
             discount: {
                 value: 0,

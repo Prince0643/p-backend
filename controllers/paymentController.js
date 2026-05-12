@@ -675,6 +675,11 @@ async function handlePaymentSuccess(attributes) {
 
                             const schedule = await ghlService.createInvoiceSchedule({
                                 contactId,
+                                contactDetails: {
+                                    name: fullName,
+                                    phoneNo: phone,
+                                    email
+                                },
                                 name: `${catalogProduct.name} (Recurring)`,
                                 currency: String(currency).toUpperCase(),
                                 startAt,

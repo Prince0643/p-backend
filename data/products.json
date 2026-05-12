@@ -1,22 +1,305 @@
 {
   "version": 1,
   "products": [
-    { "id": "start_up_va_course", "name": "START UP VA Course", "amountPhp": 1500, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "ghl_practice_access", "name": "GHL Practice Access", "amountPhp": 500, "currency": "PHP", "defaults": { "paymentMethod": "qrph", "source": "ghl_practice_access", "taxRate": 0.1, "displaySuffix": "/month" } },
-    { "id": "freelancer_plan", "name": "Freelancer Plan", "amountPhp": 3500, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "dedicated_coaching", "name": "Dedicated Coaching", "amountPhp": 999, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "customization_plan", "name": "Customization Plan", "amountPhp": 5000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "client_finder_tool", "name": "Client Finder Tool", "amountPhp": 500, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "customized_coaching_ojt", "name": "Customized Coaching + OJT", "amountPhp": 1990, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "500_ai_prompts", "name": "500 AI Prompts", "amountPhp": 500, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "starter_plan", "name": "Starter Plan", "amountPhp": 5000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "flexible_plan", "name": "Flexible Plan", "amountPhp": 7000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "flexible_plan_ai_add_on", "name": "Flexible Plan with AI-Add On", "amountPhp": 15000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "flexible_plan_ai_add_on_third_party", "name": "Flexible Plan with AI-Add On and Third-Party Integration", "amountPhp": 20800, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "flexible_plan_third_party", "name": "Flexible Plan with Third-Party Integration", "amountPhp": 12800, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "premium_plan", "name": "Premium Plan", "amountPhp": 10000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "premium_plan_ai_add_on", "name": "Premium Plan with AI-Add On", "amountPhp": 20000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "premium_plan_ai_add_on_third_party", "name": "Premium Plan with AI-Add On and Third Party Integration", "amountPhp": 25000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } },
-    { "id": "premium_plan_third_party", "name": "Premium Plan with Third-Party Integration", "amountPhp": 17000, "currency": "PHP", "defaults": { "paymentMethod": "all", "source": "nexistry_academy", "taxRate": 0.1, "displaySuffix": "" } }
+    {
+      "id": "start_up_va_course",
+      "name": "START UP VA Course",
+      "amountPhp": 1500,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "ghl_practice_access",
+      "name": "GHL Practice Access",
+      "amountPhp": 500,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "qrph",
+        "source": "ghl_practice_access",
+        "taxRate": 0.1,
+        "displaySuffix": "/month"
+      }
+    },
+    {
+      "id": "freelancer_plan",
+      "name": "Freelancer Plan",
+      "amountPhp": 3500,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "dedicated_coaching",
+      "name": "Dedicated Coaching",
+      "amountPhp": 999,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "customization_plan",
+      "name": "Customization Plan",
+      "amountPhp": 5000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "client_finder_tool",
+      "name": "Client Finder Tool",
+      "amountPhp": 500,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "customized_coaching_ojt",
+      "name": "Customized Coaching + OJT",
+      "amountPhp": 1990,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "500_ai_prompts",
+      "name": "500 AI Prompts",
+      "amountPhp": 500,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "starter_plan",
+      "name": "Starter Plan",
+      "amountPhp": 5000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "flexible_plan",
+      "name": "Flexible Plan",
+      "amountPhp": 7000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "flexible_plan_ai_add_on",
+      "name": "Flexible Plan with AI-Add On",
+      "amountPhp": 15000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "flexible_plan_ai_add_on_third_party",
+      "name": "Flexible Plan with AI-Add On and Third-Party Integration",
+      "amountPhp": 20800,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "flexible_plan_third_party",
+      "name": "Flexible Plan with Third-Party Integration",
+      "amountPhp": 12800,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "premium_plan",
+      "name": "Premium Plan",
+      "amountPhp": 12000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "premium_plan_ai_add_on",
+      "name": "Premium Plan with AI-Add On",
+      "amountPhp": 20000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "premium_plan_ai_add_on_third_party",
+      "name": "Premium Plan with AI-Add On and Third Party Integration",
+      "amountPhp": 25800,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "premium_plan_third_party",
+      "name": "Premium Plan with Third-Party Integration",
+      "amountPhp": 17800,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": ""
+      }
+    },
+    {
+      "id": "nxacademy_mc_plan_1",
+      "name": "NxAcademy MC Plan 1",
+      "amountPhp": 700,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nx_academy_mc_plan1",
+        "taxRate": 0.1,
+        "displaySuffix": "/mc-plan1"
+      }
+    },
+    {
+      "id": "nxacademy_mc_plan2",
+      "name": "NxAcademy MC Plan 2",
+      "amountPhp": 1500,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nx_academy_mc_plan2",
+        "taxRate": 0.1,
+        "displaySuffix": "/mc-plan2"
+      }
+    },
+    {
+      "id": "nxacademy_mc_plan3",
+      "name": "NxAcademy MC Plan 3",
+      "amountPhp": 3000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nx_academy_mc_plan3",
+        "taxRate": 0.1,
+        "displaySuffix": "/mc-plan3"
+      }
+    },
+    {
+      "id": "anti_lowball_playbook",
+      "name": "Anti Lowball Playbook",
+      "amountPhp": 999,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "anti_lowball_playbook",
+        "taxRate": 0.1,
+        "displaySuffix": "one-time"
+      }
+    },
+    {
+      "id": "dedicated_coaching_ojt",
+      "name": "Dedicated Coaching_v2",
+      "amountPhp": 3500,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": "one-time"
+      }
+    },
+    {
+      "id": "dedicated_coaching_renewal",
+      "name": "Dedicated Coaching_renewal",
+      "amountPhp": 2000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nexistry_academy",
+        "taxRate": 0.1,
+        "displaySuffix": "/month"
+      }
+    },
+    {
+      "id": "next_level_ai_automation",
+      "name": "Next Level AI Automation",
+      "amountPhp": 7142.86,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "next_level_ai_automation",
+        "taxRate": 0,
+        "displaySuffix": "/next-level-ai-automation"
+      }
+    },
+    {
+      "id": "priority_it_support",
+      "name": "Priority IT Support",
+      "amountPhp": 10000,
+      "currency": "PHP",
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "priority_it_support",
+        "taxRate": 0,
+        "displaySuffix": "/priority-it-support"
+      }
+    }
   ]
 }

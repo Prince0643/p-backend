@@ -410,6 +410,7 @@ To integrate your system with this backend, the following configurations must be
 Notes:
 - You can override `success_url` / `cancel_url` per product via `data/products.json` using `defaults.successUrl` and `defaults.cancelUrl`.
 - Precedence is: request body (`successUrl`/`cancelUrl`) > product catalog > env vars/defaults.
+- For `source=nexistry_core_ph`, per-product/request overrides still apply; otherwise it falls back to `NX_CORE_FRONTEND_SUCCESS_URL` / the core default redirect URLs.
 
 #### GHL Integration (Optional)
 

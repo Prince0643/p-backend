@@ -6,6 +6,7 @@ class GhlService {
         this.privateKey = process.env.GHL_PRIVATE_KEY;
         this.locationId = process.env.GHL_LOCATION_ID;
         this.invoiceScheduleLiveMode = String(process.env.GHL_INVOICE_SCHEDULE_LIVE_MODE || 'true').toLowerCase() === 'true';
+        this.invoiceScheduleStrict = String(process.env.GHL_INVOICE_SCHEDULE_STRICT || 'false').toLowerCase() === 'true';
 
         if (!this.privateKey) {
             console.warn('GHL_PRIVATE_KEY is not configured');
@@ -151,24 +152,53 @@ class GhlService {
     async createInvoiceSchedule({ contactId, name, currency, items, startAt, interval = 'month', intervalCount = 1 }) {
         if (!contactId) throw new Error('contactId is required');
         if (!startAt) throw new Error('startAt is required (YYYY-MM-DD)');
+        if (!Array.isArray(items) || items.length === 0) throw new Error('items is required');
 
+        const executeAt = String(startAt).includes('T')
+            ? String(startAt)
+            : `${String(startAt)}T00:00:00.000Z`;
+
+        // The schedule APIs use a nested schedule object with `executeAt` + `rrule` in responses.
+        // Construct a minimal payload that matches that shape.
         const payload = {
             altId: this.locationId,
             altType: 'location',
             liveMode: this.invoiceScheduleLiveMode,
             name: name || 'Recurring Invoice',
             currency: currency || 'PHP',
-            contactId,
-            startAt,
-            interval,
-            intervalCount,
-            items
+            businessDetails: {
+                name: process.env.GHL_BUSINESS_NAME || 'Nexistry Academy'
+            },
+            contactDetails: {
+                id: contactId
+            },
+            discount: {
+                value: 0,
+                type: 'percentage',
+                validOnProductIds: []
+            },
+            items,
+            schedule: {
+                executeAt,
+                rrule: {
+                    freq: String(interval || 'month').toLowerCase() === 'month' ? 'MONTHLY' : 'MONTHLY',
+                    interval: Number(intervalCount) || 1
+                }
+            }
         };
 
         Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
 
-        const res = await this.client.post('/invoices/schedule', payload);
-        return res.data;
+        try {
+            const res = await this.client.post('/invoices/schedule', payload);
+            return res.data;
+        } catch (err) {
+            const details = err.response?.data || err.message;
+            console.log('GHL createInvoiceSchedule error:', details);
+            console.log('GHL createInvoiceSchedule payload:', JSON.stringify(payload, null, 2));
+            if (this.invoiceScheduleStrict) throw err;
+            throw err;
+        }
     }
 
     async scheduleInvoiceSchedule({ scheduleId }) {
@@ -176,7 +206,8 @@ class GhlService {
         const payload = {
             altId: this.locationId,
             altType: 'location',
-            liveMode: this.invoiceScheduleLiveMode
+            liveMode: this.invoiceScheduleLiveMode,
+            autoPayment: { enable: false }
         };
         const res = await this.client.post(`/invoices/schedule/${scheduleId}/schedule`, payload);
         return res.data;

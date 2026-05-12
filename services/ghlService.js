@@ -154,9 +154,7 @@ class GhlService {
         if (!startAt) throw new Error('startAt is required (YYYY-MM-DD)');
         if (!Array.isArray(items) || items.length === 0) throw new Error('items is required');
 
-        const startAtIso = String(startAt).includes('T')
-            ? String(startAt)
-            : `${String(startAt)}T00:00:00.000Z`;
+        const startDate = String(startAt).slice(0, 10);
 
         const normalizedPhoneNo = this.normalizePhoneE164(contactDetails?.phoneNo);
         const normalizedContactDetails = {
@@ -189,9 +187,9 @@ class GhlService {
             items,
             schedule: {
                 rrule: {
-                    freq: String(interval || 'month').toLowerCase() === 'month' ? 'MONTHLY' : 'MONTHLY',
-                    interval: Number(intervalCount) || 1,
-                    dtstart: startAtIso
+                    startDate,
+                    intervalType: String(interval || 'month').toLowerCase() === 'month' ? 'month' : 'month',
+                    interval: Number(intervalCount) || 1
                 }
             }
         };

@@ -157,6 +157,8 @@ class GhlService {
         const startDate = String(startAt).slice(0, 10);
         const startDateObj = new Date(`${startDate}T00:00:00.000Z`);
         const dayOfMonth = Number(startDate.slice(8, 10));
+        const computedWeek = Number.isFinite(dayOfMonth) ? Math.ceil(dayOfMonth / 7) : undefined;
+        const numOfWeek = (computedWeek && computedWeek >= 1 && computedWeek <= 4) ? computedWeek : -1;
         const dayOfWeekValues = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const dayOfWeek = Number.isFinite(startDateObj.getUTCDay())
             ? dayOfWeekValues[startDateObj.getUTCDay()]
@@ -197,7 +199,8 @@ class GhlService {
                     intervalType: String(interval || 'month').toLowerCase() === 'month' ? 'monthly' : 'monthly',
                     interval: Number(intervalCount) || 1,
                     dayOfMonth: Number.isFinite(dayOfMonth) ? dayOfMonth : undefined,
-                    dayOfWeek: dayOfWeek || undefined
+                    dayOfWeek: dayOfWeek || undefined,
+                    numOfWeek
                 }
             }
         };

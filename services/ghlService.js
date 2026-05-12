@@ -155,6 +155,12 @@ class GhlService {
         if (!Array.isArray(items) || items.length === 0) throw new Error('items is required');
 
         const startDate = String(startAt).slice(0, 10);
+        const startDateObj = new Date(`${startDate}T00:00:00.000Z`);
+        const dayOfMonth = Number(startDate.slice(8, 10));
+        const dayOfWeekValues = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const dayOfWeek = Number.isFinite(startDateObj.getUTCDay())
+            ? dayOfWeekValues[startDateObj.getUTCDay()]
+            : undefined;
 
         const normalizedPhoneNo = this.normalizePhoneE164(contactDetails?.phoneNo);
         const normalizedContactDetails = {
@@ -189,7 +195,9 @@ class GhlService {
                 rrule: {
                     startDate,
                     intervalType: String(interval || 'month').toLowerCase() === 'month' ? 'monthly' : 'monthly',
-                    interval: Number(intervalCount) || 1
+                    interval: Number(intervalCount) || 1,
+                    dayOfMonth: Number.isFinite(dayOfMonth) ? dayOfMonth : undefined,
+                    dayOfWeek: dayOfWeek || undefined
                 }
             }
         };

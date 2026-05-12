@@ -6,6 +6,7 @@ const clockistryController = require('./clockistryController');
 const { generateId, validateEmail, validateMobile, calculateTaxedAmount } = require('../utils/helpers');
 const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 const { findProduct } = require('../utils/productCatalog');
+const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleStore');
 
 function resolveCatalogProduct({ productId, productName }) {
     const byId = productId ? findProduct({ productId }) : null;
@@ -136,6 +137,7 @@ exports.createPaymentIntent = async (req, res) => {
             email: String(email || ''),
             mobile: String(mobile || ''),
             product: String(normalizedProduct || ''),
+            productId: String(catalogProduct?.id || productId || ''),
             paymentReference: String(paymentReference || ''),
 
             baseAmount: String(baseAmount),
@@ -576,6 +578,8 @@ async function handlePaymentSuccess(attributes) {
             const email = metadata.email;
             const phone = metadata.mobile;
             const product = metadata.product;
+            const productId = metadata.productId;
+            const catalogProduct = resolveCatalogProduct({ productId, productName: product });
 
             const upsertResult = await ghlService.upsertContact({
                 fullName,
@@ -644,6 +648,76 @@ async function handlePaymentSuccess(attributes) {
                     }
                 } else {
                     console.log('GHL invoice created but no invoiceId found for record-payment');
+                }
+
+                // Optional: Create recurring invoice schedule in GHL (recurring invoices, not recurring PayMongo charges)
+                try {
+                    const isRecurring = String(catalogProduct?.billing?.type || 'one_time') === 'recurring';
+                    if (isRecurring && contactId && catalogProduct?.id) {
+                        const existingScheduleId = getScheduleId({
+                            locationId: process.env.GHL_LOCATION_ID,
+                            contactId,
+                            productId: catalogProduct.id
+                        });
+
+                        if (existingScheduleId) {
+                            console.log('GHL invoice schedule already exists for contact/product:', existingScheduleId);
+                        } else {
+                            const now = new Date();
+                            const start = new Date(now);
+                            const targetMonth = start.getMonth() + 1;
+                            start.setMonth(targetMonth);
+                            // Clamp day-of-month if next month is shorter
+                            if (start.getMonth() !== (targetMonth % 12)) {
+                                start.setDate(0);
+                            }
+                            const startAt = start.toISOString().slice(0, 10);
+
+                            const schedule = await ghlService.createInvoiceSchedule({
+                                contactId,
+                                name: `${catalogProduct.name} (Recurring)`,
+                                currency: String(currency).toUpperCase(),
+                                startAt,
+                                interval: 'month',
+                                intervalCount: 1,
+                                items: [
+                                    {
+                                        name: String(catalogProduct.name),
+                                        description: metadata.paymentReference ? `Ref: ${metadata.paymentReference}` : undefined,
+                                        currency: String(currency).toUpperCase(),
+                                        amount,
+                                        qty: 1,
+                                        type: 'recurring'
+                                    }
+                                ].map(item => {
+                                    Object.keys(item).forEach(k => item[k] === undefined && delete item[k]);
+                                    return item;
+                                })
+                            });
+
+                            const scheduleId = schedule?._id || schedule?.id || schedule?.schedule?._id || schedule?.schedule?.id;
+                            if (scheduleId) {
+                                setScheduleId({
+                                    locationId: process.env.GHL_LOCATION_ID,
+                                    contactId,
+                                    productId: catalogProduct.id,
+                                    scheduleId
+                                });
+                                console.log('GHL invoice schedule created:', scheduleId);
+
+                                try {
+                                    await ghlService.scheduleInvoiceSchedule({ scheduleId });
+                                    console.log('GHL invoice schedule activated:', scheduleId);
+                                } catch (schedErr) {
+                                    console.log('GHL invoice schedule activation error (non-fatal):', schedErr.response?.data || schedErr.message);
+                                }
+                            } else {
+                                console.log('GHL invoice schedule created but no scheduleId found:', schedule);
+                            }
+                        }
+                    }
+                } catch (scheduleErr) {
+                    console.log('GHL invoice schedule error (non-fatal):', scheduleErr.response?.data || scheduleErr.message);
                 }
             }
         }

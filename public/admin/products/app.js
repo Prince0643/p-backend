@@ -15,6 +15,7 @@ const els = {
   paymentMethodInput: document.getElementById('paymentMethodInput'),
   sourceInput: document.getElementById('sourceInput'),
   suffixInput: document.getElementById('suffixInput'),
+  billingTypeInput: document.getElementById('billingTypeInput'),
   successUrlInput: document.getElementById('successUrlInput'),
   cancelUrlInput: document.getElementById('cancelUrlInput'),
   backendUrlInput: document.getElementById('backendUrlInput'),
@@ -70,6 +71,7 @@ function getFormPayload() {
   const paymentMethod = els.paymentMethodInput.value.trim();
   const source = els.sourceInput.value.trim();
   const displaySuffix = els.suffixInput.value.trim();
+  const billingType = String(els.billingTypeInput?.value || 'one_time').trim();
   const successUrl = els.successUrlInput.value.trim();
   const cancelUrl = els.cancelUrlInput.value.trim();
 
@@ -78,6 +80,9 @@ function getFormPayload() {
     name,
     amountPhp,
     currency: 'PHP',
+    billing: {
+      type: billingType
+    },
     defaults: {
       ...(paymentMethod ? { paymentMethod } : {}),
       ...(source ? { source } : {}),
@@ -99,6 +104,9 @@ function fillForm(product) {
   els.paymentMethodInput.value = product?.defaults?.paymentMethod ?? '';
   els.sourceInput.value = product?.defaults?.source ?? '';
   els.suffixInput.value = product?.defaults?.displaySuffix ?? '';
+  if (els.billingTypeInput) {
+    els.billingTypeInput.value = product?.billing?.type || 'one_time';
+  }
   els.successUrlInput.value = product?.defaults?.successUrl ?? '';
   els.cancelUrlInput.value = product?.defaults?.cancelUrl ?? '';
   state.selectedId = product?.id || null;

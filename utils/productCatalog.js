@@ -36,6 +36,19 @@ function normalizeProduct(product) {
     const successUrl = defaults.successUrl != null ? String(defaults.successUrl).trim() : '';
     const cancelUrl = defaults.cancelUrl != null ? String(defaults.cancelUrl).trim() : '';
 
+    const billing = product.billing && typeof product.billing === 'object' ? product.billing : {};
+    const billingTypeRaw = billing.type != null ? String(billing.type).trim().toLowerCase() : '';
+    const billingType = billingTypeRaw || 'one_time';
+    if (!['one_time', 'recurring'].includes(billingType)) {
+        throw new Error('billing.type must be "one_time" or "recurring"');
+    }
+
+    const intervalRaw = billing.interval != null ? String(billing.interval).trim().toLowerCase() : '';
+    const interval = intervalRaw || 'monthly';
+    if (billingType === 'recurring' && interval !== 'monthly') {
+        throw new Error('billing.interval must be "monthly" for recurring products');
+    }
+
     if (!id) throw new Error('Product id is required');
     if (!name) throw new Error('Product name is required');
     if (!Number.isFinite(amountPhp) || amountPhp <= 0) throw new Error('amountPhp must be a positive number');
@@ -58,6 +71,10 @@ function normalizeProduct(product) {
         name,
         amountPhp,
         currency,
+        billing: {
+            type: billingType,
+            interval: billingType === 'recurring' ? interval : undefined
+        },
         defaults: {
             paymentMethod: defaults.paymentMethod ? String(defaults.paymentMethod) : 'all',
             source: defaults.source ? String(defaults.source) : id,

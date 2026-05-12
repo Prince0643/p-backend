@@ -75,6 +75,14 @@
             <div class="field__hint">Label only; backend charges one-time per checkout.</div>
           </label>
           <label class="field">
+            <div class="field__label">Billing</div>
+            <select id="billingTypeInput" class="input">
+              <option value="one_time">One-time</option>
+              <option value="recurring">Recurring (monthly invoices in GHL)</option>
+            </select>
+            <div class="field__hint">Recurring creates a GHL invoice schedule after the first successful payment (does not auto-charge in PayMongo).</div>
+          </label>
+          <label class="field">
             <div class="field__label">Success URL</div>
             <input id="successUrlInput" class="input" placeholder="https://your-site.com/success?session_id={CHECKOUT_SESSION_ID}" />
             <div class="field__hint">Optional. Must start with http:// or https://. Supports {CHECKOUT_SESSION_ID}.</div>

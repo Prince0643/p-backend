@@ -5,6 +5,7 @@ class GhlService {
         this.baseURL = 'https://services.leadconnectorhq.com';
         this.privateKey = process.env.GHL_PRIVATE_KEY;
         this.locationId = process.env.GHL_LOCATION_ID;
+        this.invoiceScheduleLiveMode = String(process.env.GHL_INVOICE_SCHEDULE_LIVE_MODE || 'true').toLowerCase() === 'true';
 
         if (!this.privateKey) {
             console.warn('GHL_PRIVATE_KEY is not configured');
@@ -128,6 +129,56 @@ class GhlService {
         };
 
         const res = await this.client.post(`/invoices/${invoiceId}/record-payment`, payload);
+        return res.data;
+    }
+
+    async listInvoiceSchedules({ search, limit = 50, offset = 0, startAt, endAt, status }) {
+        const params = {
+            altId: this.locationId,
+            altType: 'location',
+            limit,
+            offset
+        };
+        if (search) params.search = String(search);
+        if (startAt) params.startAt = String(startAt);
+        if (endAt) params.endAt = String(endAt);
+        if (status) params.status = String(status);
+
+        const res = await this.client.get('/invoices/schedule', { params });
+        return res.data;
+    }
+
+    async createInvoiceSchedule({ contactId, name, currency, items, startAt, interval = 'month', intervalCount = 1 }) {
+        if (!contactId) throw new Error('contactId is required');
+        if (!startAt) throw new Error('startAt is required (YYYY-MM-DD)');
+
+        const payload = {
+            altId: this.locationId,
+            altType: 'location',
+            liveMode: this.invoiceScheduleLiveMode,
+            name: name || 'Recurring Invoice',
+            currency: currency || 'PHP',
+            contactId,
+            startAt,
+            interval,
+            intervalCount,
+            items
+        };
+
+        Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+
+        const res = await this.client.post('/invoices/schedule', payload);
+        return res.data;
+    }
+
+    async scheduleInvoiceSchedule({ scheduleId }) {
+        if (!scheduleId) throw new Error('scheduleId is required');
+        const payload = {
+            altId: this.locationId,
+            altType: 'location',
+            liveMode: this.invoiceScheduleLiveMode
+        };
+        const res = await this.client.post(`/invoices/schedule/${scheduleId}/schedule`, payload);
         return res.data;
     }
 }

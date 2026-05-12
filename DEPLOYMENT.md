@@ -118,6 +118,7 @@ Notes:
 
 - Do **not** commit `.env`.
 - Prefer PayMongo **live** keys only on the VPS.
+- Per-product redirect overrides (optional): set `defaults.successUrl` / `defaults.cancelUrl` in `data/products.json`.
 
 ## 5) Start the app with PM2
 

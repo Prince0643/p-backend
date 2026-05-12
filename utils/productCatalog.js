@@ -33,11 +33,20 @@ function normalizeProduct(product) {
     const amountPhp = Number(product.amountPhp);
     const currency = String(product.currency || 'PHP').toUpperCase();
     const defaults = product.defaults && typeof product.defaults === 'object' ? product.defaults : {};
+    const successUrl = defaults.successUrl != null ? String(defaults.successUrl).trim() : '';
+    const cancelUrl = defaults.cancelUrl != null ? String(defaults.cancelUrl).trim() : '';
 
     if (!id) throw new Error('Product id is required');
     if (!name) throw new Error('Product name is required');
     if (!Number.isFinite(amountPhp) || amountPhp <= 0) throw new Error('amountPhp must be a positive number');
     if (currency !== 'PHP') throw new Error('Only PHP currency is supported');
+
+    if (successUrl && !/^https?:\/\//i.test(successUrl)) {
+        throw new Error('defaults.successUrl must start with http:// or https://');
+    }
+    if (cancelUrl && !/^https?:\/\//i.test(cancelUrl)) {
+        throw new Error('defaults.cancelUrl must start with http:// or https://');
+    }
 
     const taxRate = defaults.taxRate != null ? Number(defaults.taxRate) : undefined;
     if (taxRate != null && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1)) {
@@ -53,7 +62,9 @@ function normalizeProduct(product) {
             paymentMethod: defaults.paymentMethod ? String(defaults.paymentMethod) : 'all',
             source: defaults.source ? String(defaults.source) : id,
             taxRate: taxRate != null ? taxRate : undefined,
-            displaySuffix: defaults.displaySuffix ? String(defaults.displaySuffix) : ''
+            displaySuffix: defaults.displaySuffix ? String(defaults.displaySuffix) : '',
+            successUrl: successUrl || undefined,
+            cancelUrl: cancelUrl || undefined
         }
     };
 }
@@ -136,6 +147,8 @@ function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalso
     const paymentMethod = product.defaults.paymentMethod || 'all';
     const source = product.defaults.source || product.id;
     const suffix = product.defaults.displaySuffix || '';
+    const successUrl = product.defaults.successUrl || '';
+    const cancelUrl = product.defaults.cancelUrl || '';
 
     return `<!-- Nexistry PayMongo Product Snippet: ${product.name} -->
 <script>
@@ -150,6 +163,8 @@ function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalso
   const PAYMENT_METHOD = '${paymentMethod}';
   const SOURCE = '${source.replace(/'/g, "\\'")}';
   const DISPLAY_SUFFIX = '${suffix.replace(/'/g, "\\'")}';
+  const SUCCESS_URL = '${successUrl.replace(/'/g, "\\'")}';
+  const CANCEL_URL = '${cancelUrl.replace(/'/g, "\\'")}';
 
   // Example totals (optional display)
   const TAX_AMOUNT = BASE_AMOUNT * TAX_RATE;
@@ -171,6 +186,8 @@ function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalso
         product: PRODUCT_NAME,
         paymentMethod: PAYMENT_METHOD,
         source: SOURCE,
+        ...(SUCCESS_URL ? { successUrl: SUCCESS_URL } : {}),
+        ...(CANCEL_URL ? { cancelUrl: CANCEL_URL } : {}),
         amount: amountToCharge,
         baseAmount: BASE_AMOUNT,
         taxAmount: TAX_AMOUNT,
@@ -198,4 +215,3 @@ module.exports = {
     deleteProduct,
     buildHtmlSnippet
 };
-

@@ -15,6 +15,8 @@ const els = {
   paymentMethodInput: document.getElementById('paymentMethodInput'),
   sourceInput: document.getElementById('sourceInput'),
   suffixInput: document.getElementById('suffixInput'),
+  successUrlInput: document.getElementById('successUrlInput'),
+  cancelUrlInput: document.getElementById('cancelUrlInput'),
   backendUrlInput: document.getElementById('backendUrlInput'),
   snippetBox: document.getElementById('snippetBox'),
   copySnippetBtn: document.getElementById('copySnippetBtn'),
@@ -68,6 +70,8 @@ function getFormPayload() {
   const paymentMethod = els.paymentMethodInput.value.trim();
   const source = els.sourceInput.value.trim();
   const displaySuffix = els.suffixInput.value.trim();
+  const successUrl = els.successUrlInput.value.trim();
+  const cancelUrl = els.cancelUrlInput.value.trim();
 
   return {
     id: id || slugify(name),
@@ -78,7 +82,9 @@ function getFormPayload() {
       ...(paymentMethod ? { paymentMethod } : {}),
       ...(source ? { source } : {}),
       ...(taxRateRaw ? { taxRate } : {}),
-      ...(displaySuffix ? { displaySuffix } : {})
+      ...(displaySuffix ? { displaySuffix } : {}),
+      ...(successUrl ? { successUrl } : {}),
+      ...(cancelUrl ? { cancelUrl } : {})
     }
   };
 }
@@ -93,6 +99,8 @@ function fillForm(product) {
   els.paymentMethodInput.value = product?.defaults?.paymentMethod ?? '';
   els.sourceInput.value = product?.defaults?.source ?? '';
   els.suffixInput.value = product?.defaults?.displaySuffix ?? '';
+  els.successUrlInput.value = product?.defaults?.successUrl ?? '';
+  els.cancelUrlInput.value = product?.defaults?.cancelUrl ?? '';
   state.selectedId = product?.id || null;
 }
 
@@ -262,4 +270,3 @@ els.productForm.addEventListener('submit', async (e) => {
     toast(e.message);
   }
 })();
-

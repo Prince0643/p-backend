@@ -407,6 +407,10 @@ To integrate your system with this backend, the following configurations must be
 | `FRONTEND_FAILURE_URL` | Yes | URL to redirect after failed payment |
 | `FRONTEND_CANCEL_URL` | Yes | URL to redirect after cancelled payment |
 
+Notes:
+- You can override `success_url` / `cancel_url` per product via `data/products.json` using `defaults.successUrl` and `defaults.cancelUrl`.
+- Precedence is: request body (`successUrl`/`cancelUrl`) > product catalog > env vars/defaults.
+
 #### GHL Integration (Optional)
 
 | Variable | Required | Description |

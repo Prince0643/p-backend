@@ -25,6 +25,8 @@ exports.createPaymentIntent = async (req, res) => {
             mobile,
             product,
             productId,
+            successUrl: requestSuccessUrl,
+            cancelUrl: requestCancelUrl,
             notes,
             businessName,
             setupType,
@@ -190,16 +192,19 @@ exports.createPaymentIntent = async (req, res) => {
 
         console.log('Payment method selected:', selectedPaymentMethod, 'checkout types:', paymentMethods);
 
+        const catalogSuccessUrl = catalogProduct?.defaults?.successUrl;
+        const catalogCancelUrl = catalogProduct?.defaults?.cancelUrl;
+
         const coreSuccessUrlDefault = 'https://nexistrycoreph.nexistrydigitalsolutions.com/product-thank-you-page-703324-971918-441701';
         const successUrl = (source === 'nexistry_core_ph')
             ? (process.env.NX_CORE_FRONTEND_SUCCESS_URL || coreSuccessUrlDefault)
-            : undefined;
+            : (requestSuccessUrl || catalogSuccessUrl || undefined);
         const failureUrl = (source === 'nexistry_core_ph')
             ? (process.env.NX_CORE_FRONTEND_FAILURE_URL || process.env.FRONTEND_FAILURE_URL)
             : undefined;
         const cancelUrl = (source === 'nexistry_core_ph')
             ? 'https://nexistrycoreph.nexistrydigitalsolutions.com/ph-ver-753092'
-            : undefined;
+            : (requestCancelUrl || catalogCancelUrl || undefined);
 
         // Some PayMongo method types may be eligible for Checkout, but not accepted in PaymentIntent's
         // `payment_method_allowed` field. Keep a conservative allowlist for PaymentIntent, while

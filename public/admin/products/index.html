@@ -74,6 +74,16 @@
             <input id="suffixInput" class="input" placeholder="e.g. /month" />
             <div class="field__hint">Label only; backend charges one-time per checkout.</div>
           </label>
+          <label class="field">
+            <div class="field__label">Success URL</div>
+            <input id="successUrlInput" class="input" placeholder="https://your-site.com/success?session_id={CHECKOUT_SESSION_ID}" />
+            <div class="field__hint">Optional. Must start with http:// or https://. Supports {CHECKOUT_SESSION_ID}.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Cancel URL</div>
+            <input id="cancelUrlInput" class="input" placeholder="https://your-site.com/cancelled" />
+            <div class="field__hint">Optional. Must start with http:// or https://.</div>
+          </label>
         </div>
 
         <div class="row row--end">
@@ -101,4 +111,3 @@
   <script src="/public/admin/products/app.js"></script>
 </body>
 </html>
-

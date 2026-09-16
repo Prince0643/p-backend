@@ -427,6 +427,14 @@ Notes:
 | `LEADCONNECTOR_WEBHOOK` | No | LeadConnector webhook URL for payment notifications |
 | `DISABLE_LEADCONNECTOR_WEBHOOK` | No | Set to `true` to disable LeadConnector webhooks |
 
+#### PayMongo Webhook Signature Verification (Strongly recommended)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PAYMONGO_WEBHOOK_SECRET` | No (but see below) | Signing secret shown when the webhook is created in the PayMongo dashboard/API. Verifies the `Paymongo-Signature` header on incoming `/api/payments/webhook` requests. |
+
+Until this is set, `/api/payments/webhook` accepts any request body with no authentication — anyone who finds the URL can POST fake `payment.paid` events and trigger GHL invoice creation/affiliate payouts. Set this in every environment as soon as the webhook is created in PayMongo.
+
 #### Server Configuration
 
 | Variable | Required | Description |
@@ -460,6 +468,9 @@ GHL_BUSINESS_NAME=Your Business Name
 
 # LeadConnector Webhook (optional)
 LEADCONNECTOR_WEBHOOK=https://services.leadconnectorhq.com/hooks/your-webhook-id
+
+# PayMongo webhook signature verification (strongly recommended)
+PAYMONGO_WEBHOOK_SECRET=whsk_xxxxxxxxxxxxxxxx
 ```
 
 ---

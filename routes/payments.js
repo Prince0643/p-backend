@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/paymentController');
+const { verifyPaymongoWebhookSignature } = require('../middleware/paymongoWebhook');
 
 function requireDiagnosticToken(req, res, next) {
     const token = process.env.DIAGNOSTIC_TOKEN;
@@ -20,7 +21,7 @@ router.post('/create-payment-intent', paymentController.createPaymentIntent);
 router.get('/status/:paymentId', paymentController.getPaymentStatus);
 
 // PayMongo webhook endpoint (for payment updates)
-router.post('/webhook', paymentController.handleWebhook);
+router.post('/webhook', verifyPaymongoWebhookSignature, paymentController.handleWebhook);
 
 // Cancel payment
 router.post('/cancel/:paymentId', paymentController.cancelPayment);

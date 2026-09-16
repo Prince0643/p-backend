@@ -42,7 +42,12 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // Body parsing
-app.use(express.json({ limit: '10mb' }));
+// `verify` captures the raw request body so the PayMongo webhook signature
+// (computed over the exact bytes PayMongo sent) can be checked before trusting req.body.
+app.use(express.json({
+    limit: '10mb',
+    verify: (req, res, buf) => { req.rawBody = buf; }
+}));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Static files (if needed)

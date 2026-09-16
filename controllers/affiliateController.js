@@ -68,8 +68,32 @@ exports.getOne = (req, res) => {
     try {
         const affiliate = affiliateStore.findAffiliateById(req.params.id);
         if (!affiliate) return res.status(404).json({ error: 'Affiliate not found' });
-        res.json({ success: true, affiliate });
+
+        const coupon = affiliate.couponCode ? couponStore.findCoupon(affiliate.couponCode) : null;
+        res.json({ success: true, affiliate, coupon });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to get affiliate' });
+    }
+};
+
+// PATCH /api/admin/affiliates/:id/status (admin)
+// Suspending/terminating an affiliate deactivates their coupon so it stops working
+// immediately; reactivating flips it back on (still subject to its own redemption cap).
+exports.updateStatus = (req, res) => {
+    try {
+        const { status } = req.body;
+        const affiliate = affiliateStore.setAffiliateStatus(req.params.id, status);
+        if (!affiliate) return res.status(404).json({ error: 'Affiliate not found' });
+
+        if (affiliate.couponCode) {
+            const coupon = couponStore.findCoupon(affiliate.couponCode);
+            if (coupon) {
+                couponStore.upsertCoupon({ ...coupon, active: status === 'active' });
+            }
+        }
+
+        res.json({ success: true, affiliate });
+    } catch (err) {
+        res.status(400).json({ error: err.message || 'Failed to update affiliate status' });
     }
 };

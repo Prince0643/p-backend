@@ -176,12 +176,30 @@ function createAffiliate(normalized, couponCode) {
     return record;
 }
 
+const AFFILIATE_STATUSES = ['active', 'suspended', 'terminated'];
+
+function setAffiliateStatus(id, status) {
+    if (!AFFILIATE_STATUSES.includes(status)) {
+        throw new Error(`status must be one of ${AFFILIATE_STATUSES.join(', ')}`);
+    }
+    const store = readStore();
+    const index = store.affiliates.findIndex((a) => a.id === id);
+    if (index === -1) return null;
+
+    const updated = { ...store.affiliates[index], status, statusUpdatedAt: new Date().toISOString() };
+    store.affiliates[index] = updated;
+    writeStore({ version: store.version || 1, affiliates: store.affiliates });
+    return updated;
+}
+
 module.exports = {
     AFFILIATES_PATH,
     PH_EWALLET_METHODS,
     PH_BANK_METHODS,
     GLOBAL_METHODS,
+    AFFILIATE_STATUSES,
     normalizeAffiliate,
+    setAffiliateStatus,
     listAffiliates,
     findAffiliateByEmail,
     findAffiliateById,

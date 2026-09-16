@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nexistry Backend - Affiliates</title>
+  <link rel="stylesheet" href="/public/admin/affiliates/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container">
+      <div class="brand">
+        <div class="brand__title">Nexistry Backend</div>
+        <div class="brand__subtitle">Affiliate Registrations</div>
+      </div>
+      <div class="topbar__actions">
+        <a class="btn btn--ghost" href="/admin/coupons">Coupons</a>
+        <a class="btn btn--ghost" href="/admin/products">Products</a>
+        <button id="setKeyBtn" class="btn btn--ghost">Set API Key</button>
+        <button id="refreshBtn" class="btn btn--ghost">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container layout">
+    <section class="panel">
+      <div class="panel__header">
+        <h2>Affiliates</h2>
+        <div class="row">
+          <input id="searchInput" class="input" placeholder="Search name, email, coupon…" />
+        </div>
+      </div>
+      <div id="affiliatesList" class="list"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__header">
+        <h2 id="detailTitle">Select an affiliate</h2>
+        <div class="row">
+          <select id="statusSelect" class="input hidden"></select>
+          <button id="updateStatusBtn" class="btn hidden">Update Status</button>
+        </div>
+      </div>
+
+      <div id="detailEmpty" class="empty-state">
+        Click an affiliate on the left to view their registration details, payout info, and coupon.
+      </div>
+
+      <div id="detailBody" class="detail hidden">
+        <div class="detail__grid">
+          <div class="detail__group">
+            <div class="detail__label">Contact</div>
+            <div id="detailContact" class="detail__value"></div>
+          </div>
+          <div class="detail__group">
+            <div class="detail__label">Socials</div>
+            <div id="detailSocials" class="detail__value"></div>
+          </div>
+          <div class="detail__group">
+            <div class="detail__label">Payout (<span id="detailRegion"></span>)</div>
+            <div id="detailPayout" class="detail__value"></div>
+          </div>
+          <div class="detail__group">
+            <div class="detail__label">Coupon</div>
+            <div id="detailCoupon" class="detail__value"></div>
+          </div>
+          <div class="detail__group">
+            <div class="detail__label">Registered</div>
+            <div id="detailRegistered" class="detail__value"></div>
+          </div>
+          <div class="detail__group">
+            <div class="detail__label">Terms accepted</div>
+            <div id="detailTerms" class="detail__value"></div>
+          </div>
+        </div>
+      </div>
+      <div id="toast" class="toast hidden"></div>
+    </section>
+  </main>
+
+  <script src="/public/admin/affiliates/app.js"></script>
+</body>
+</html>

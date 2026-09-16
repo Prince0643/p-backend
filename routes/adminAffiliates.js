@@ -7,5 +7,6 @@ router.use(validateAdminApiKey);
 
 router.get('/affiliates', affiliateController.list);
 router.get('/affiliates/:id', affiliateController.getOne);
+router.patch('/affiliates/:id/status', affiliateController.updateStatus);
 
 module.exports = router;

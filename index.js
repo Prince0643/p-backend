@@ -72,6 +72,10 @@ app.get('/admin/coupons', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'admin', 'coupons', 'index.html'));
 });
 
+app.get('/admin/affiliates', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin', 'affiliates', 'index.html'));
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.status(200).json({

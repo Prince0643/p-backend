@@ -7,6 +7,7 @@ const { generateId, validateEmail, validateMobile, calculateTaxedAmount } = requ
 const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 const { findProduct } = require('../utils/productCatalog');
 const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleStore');
+const couponStore = require('../utils/couponStore');
 
 function resolveCatalogProduct({ productId, productName }) {
     const byId = productId ? findProduct({ productId }) : null;
@@ -78,44 +79,44 @@ exports.createPaymentIntent = async (req, res) => {
         const defaultTaxRate = Number(process.env.TAX_RATE ?? 0.10);
         const coreTaxRate = Number(process.env.NX_CORE_TAX_RATE ?? 0.12);
         const taxRate = (source === 'nexistry_core_ph') ? coreTaxRate : defaultTaxRate;
-        
-        // ✅ FIXED: Use frontend amount if provided and valid, otherwise calculate from product
-        let finalAmount, baseAmount, taxAmount;
-        
-        if (amount && amount > 0 && amount !== productInfo.amount) {
-            // Frontend provided a discounted amount - use it
-            finalAmount = Number(Number(amount).toFixed(2));
-            // Calculate base and tax from the discounted total
-            // finalAmount = base + tax, and tax = base * taxRate
-            // So: finalAmount = base + (base * taxRate) = base * (1 + taxRate)
-            // Therefore: base = finalAmount / (1 + taxRate)
-            baseAmount = Number((finalAmount / (1 + taxRate)).toFixed(2));
-            taxAmount = Number((finalAmount - baseAmount).toFixed(2));
-            console.log('Using frontend amount with discount:', {
-                frontendAmount: amount,
-                finalAmount,
-                baseAmount,
-                taxAmount,
-                discountAmount: discountAmount || 0,
-                promoCode: promoCode || 'none'
+
+        // Pricing is always computed server-side from the catalog price + tax rate.
+        // A discount is only applied when a valid, active, non-expired promo code is
+        // supplied — the client-sent `amount`/`discountAmount` are never trusted for
+        // pricing, only echoed back for display/logging. This closes the hole where a
+        // client could set any `amount` up to the catalog max without a real coupon.
+        let appliedCoupon = null;
+        const normalizedPromoCode = promoCode ? String(promoCode).trim() : '';
+
+        if (normalizedPromoCode) {
+            const validation = couponStore.validateCouponForCharge({
+                code: normalizedPromoCode,
+                productId: catalogProduct.id
             });
-        } else {
-            // Use product mapping (no discount)
-            const taxed = calculateTaxedAmount(productInfo.amount, taxRate);
-            finalAmount = Number(taxed.totalAmount.toFixed(2));
-            baseAmount = Number(taxed.baseAmount.toFixed(2));
-            taxAmount = Number(taxed.taxAmount.toFixed(2));
+            if (!validation.coupon) {
+                return res.status(400).json({ error: validation.error || 'Invalid promo code' });
+            }
+            appliedCoupon = validation.coupon;
         }
 
-        // Safety: prevent accidental overcharge beyond catalog price (+ tax)
-        const maxAllowed = Number(calculateTaxedAmount(productInfo.amount, taxRate).totalAmount.toFixed(2));
-        if (finalAmount > maxAllowed) {
-            return res.status(400).json({
-                error: 'Amount exceeds product catalog maximum',
-                maxAllowed,
-                requested: finalAmount
-            });
-        }
+        const serverDiscountAmount = appliedCoupon
+            ? Number((productInfo.amount * appliedCoupon.discountPercent).toFixed(2))
+            : 0;
+        const discountedBaseCatalogAmount = Number((productInfo.amount - serverDiscountAmount).toFixed(2));
+
+        const taxed = calculateTaxedAmount(discountedBaseCatalogAmount, taxRate);
+        const finalAmount = Number(taxed.totalAmount.toFixed(2));
+        const baseAmount = Number(taxed.baseAmount.toFixed(2));
+        const taxAmount = Number(taxed.taxAmount.toFixed(2));
+
+        console.log('Computed server-side pricing:', {
+            catalogAmount: productInfo.amount,
+            promoCode: appliedCoupon?.code || 'none',
+            serverDiscountAmount,
+            baseAmount,
+            taxAmount,
+            finalAmount
+        });
 
         // Log what we received for debugging
         console.log('Received payment request:', {
@@ -126,8 +127,8 @@ exports.createPaymentIntent = async (req, res) => {
             paymentMethod,
             source,
             frontendAmount: amount,
-            discountAmount,
-            promoCode
+            frontendDiscountAmount: discountAmount,
+            promoCode: normalizedPromoCode
         });
 
         // FIXED: Flatten metadata - include paymentMethod and source
@@ -145,9 +146,9 @@ exports.createPaymentIntent = async (req, res) => {
             taxAmount: String(taxAmount),
             totalAmount: String(finalAmount),
 
-            // ADD: Discount information
-            discountAmount: String(discountAmount || 0),
-            promoCode: String(promoCode || ''),
+            // ADD: Discount information (server-computed, not client-trusted)
+            discountAmount: String(serverDiscountAmount || 0),
+            promoCode: String(appliedCoupon?.code || ''),
 
             // ADD: Referral information
             referredBy: String(referredBy || ''),
@@ -226,7 +227,7 @@ exports.createPaymentIntent = async (req, res) => {
         const paymentIntent = await paymongoService.createPaymentIntent({
             amount: finalAmount,
             currency: productInfo.currency,
-            description: `${normalizedProduct} - ${fullName}${discountAmount > 0 ? ` (Promo: ${promoCode})` : ''}`,
+            description: `${normalizedProduct} - ${fullName}${appliedCoupon ? ` (Promo: ${appliedCoupon.code})` : ''}`,
             paymentMethodAllowed: paymentIntentAllowed,
             paymentMethodTypes: checkoutMethodTypes,
             metadata: flattenedMetadata,
@@ -249,8 +250,8 @@ exports.createPaymentIntent = async (req, res) => {
             baseAmount: baseAmount,
             taxRate: taxRate,
             taxAmount: taxAmount,
-            discountAmount: discountAmount || 0,
-            promoCode: promoCode || '',
+            discountAmount: serverDiscountAmount,
+            promoCode: appliedCoupon?.code || '',
             notes,
             businessName,
             setupType,
@@ -278,8 +279,8 @@ exports.createPaymentIntent = async (req, res) => {
             baseAmount: baseAmount,
             taxRate: taxRate,
             taxAmount: taxAmount,
-            discountAmount: discountAmount || 0,
-            promoCode: promoCode || '',
+            discountAmount: serverDiscountAmount,
+            promoCode: appliedCoupon?.code || '',
             currency: productInfo.currency
         });
 
@@ -569,6 +570,37 @@ async function handlePaymentSuccess(attributes) {
     if (isClockistry) {
         console.log('Clockistry payment - skipping GHL and LeadConnector integration');
         return;
+    }
+
+    // Record the affiliate fee owed for this paid conversion, if a valid coupon was used.
+    // Recorded on payment.paid (not at intent creation) so unpaid/abandoned checkouts never
+    // generate a payout obligation. Independent of GHL config so it always tracks payouts.
+    if (metadata.promoCode) {
+        try {
+            const coupon = couponStore.findCoupon(metadata.promoCode);
+            if (coupon) {
+                const redemptionBaseAmount = Number(metadata.baseAmount) || 0;
+                const affiliateFeeAmount = Number((redemptionBaseAmount * coupon.affiliateFeePercent).toFixed(2));
+
+                couponStore.recordRedemption({
+                    code: coupon.code,
+                    paymentReference: metadata.paymentReference,
+                    productId: metadata.productId,
+                    email: metadata.email,
+                    fullName: metadata.fullName,
+                    baseAmount: redemptionBaseAmount,
+                    discountAmount: Number(metadata.discountAmount) || 0,
+                    affiliateFeeAmount,
+                    affiliateEmail: coupon.affiliateEmail || metadata.referredBy || '',
+                    currency: paymentData.attributes?.currency || 'PHP'
+                });
+                console.log('Coupon redemption recorded:', coupon.code, 'affiliateFee:', affiliateFeeAmount);
+            } else {
+                console.log('Coupon redemption skipped: unknown code in metadata:', metadata.promoCode);
+            }
+        } catch (err) {
+            console.log('Coupon redemption recording error (non-fatal):', err.message);
+        }
     }
 
     try {

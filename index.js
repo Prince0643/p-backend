@@ -9,6 +9,7 @@ const path = require('path');
 const paymentRoutes = require('./routes/payments');
 const clockistryRoutes = require('./routes/clockistry');
 const adminProductRoutes = require('./routes/adminProducts');
+const adminCouponRoutes = require('./routes/adminCoupons');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -51,10 +52,15 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use('/api/payments', paymentRoutes);
 app.use('/api/clockistry', clockistryRoutes);
 app.use('/api/admin', adminProductRoutes);
+app.use('/api/admin', adminCouponRoutes);
 
 // Admin UI entry (served from /public)
 app.get('/admin/products', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'admin', 'products', 'index.html'));
+});
+
+app.get('/admin/coupons', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin', 'coupons', 'index.html'));
 });
 
 // Health check endpoint

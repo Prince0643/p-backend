@@ -10,6 +10,8 @@ const paymentRoutes = require('./routes/payments');
 const clockistryRoutes = require('./routes/clockistry');
 const adminProductRoutes = require('./routes/adminProducts');
 const adminCouponRoutes = require('./routes/adminCoupons');
+const affiliateRoutes = require('./routes/affiliates');
+const adminAffiliateRoutes = require('./routes/adminAffiliates');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -58,6 +60,8 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/clockistry', clockistryRoutes);
 app.use('/api/admin', adminProductRoutes);
 app.use('/api/admin', adminCouponRoutes);
+app.use('/api/affiliates', affiliateRoutes);
+app.use('/api/admin', adminAffiliateRoutes);
 
 // Admin UI entry (served from /public)
 app.get('/admin/products', (req, res) => {

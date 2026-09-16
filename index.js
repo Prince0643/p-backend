@@ -12,6 +12,7 @@ const adminProductRoutes = require('./routes/adminProducts');
 const adminCouponRoutes = require('./routes/adminCoupons');
 const affiliateRoutes = require('./routes/affiliates');
 const adminAffiliateRoutes = require('./routes/adminAffiliates');
+const adminSolutionsRoutes = require('./routes/adminSolutions');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -62,6 +63,7 @@ app.use('/api/admin', adminProductRoutes);
 app.use('/api/admin', adminCouponRoutes);
 app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/admin', adminAffiliateRoutes);
+app.use('/api/admin', adminSolutionsRoutes);
 
 // Admin UI entry (served from /public)
 app.get('/admin/products', (req, res) => {
@@ -74,6 +76,10 @@ app.get('/admin/coupons', (req, res) => {
 
 app.get('/admin/affiliates', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'admin', 'affiliates', 'index.html'));
+});
+
+app.get('/admin/solutions', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin', 'solutions', 'index.html'));
 });
 
 // Health check endpoint

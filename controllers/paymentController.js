@@ -8,6 +8,7 @@ const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 const { findProduct } = require('../utils/productCatalog');
 const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleStore');
 const couponStore = require('../utils/couponStore');
+const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 
 function resolveCatalogProduct({ productId, productName }) {
     const byId = productId ? findProduct({ productId }) : null;
@@ -237,6 +238,20 @@ exports.createPaymentIntent = async (req, res) => {
         });
 
         console.log('Payment intent created:', paymentIntent.id);
+
+        digitalSolutionsStore.recordTransaction({
+            type: 'academy_product',
+            transactionId: paymentReference,
+            customerEmail: email,
+            customerName: fullName,
+            productId: catalogProduct.id,
+            productName: normalizedProduct,
+            amount: finalAmount,
+            currency: productInfo.currency,
+            promoCode: appliedCoupon?.code,
+            source,
+            status: 'initiated'
+        });
 
         // Send to LeadConnector webhook - include paymentMethod and source
         await webhookService.sendToLeadConnector({
@@ -556,6 +571,12 @@ async function handlePaymentSuccess(attributes) {
     // Check if this is a Clockistry payment - skip GHL for Clockistry
     const isClockistry = metadata.source === 'clockistry';
 
+    if (isClockistry) {
+        digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'paid');
+    } else {
+        digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'paid');
+    }
+
     // Forward to Clockistry if applicable
     if (isClockistry) {
         try {
@@ -785,6 +806,12 @@ async function handlePaymentFailure(attributes) {
 
     // Check if this is a Clockistry payment
     const isClockistry = metadata.source === 'clockistry';
+
+    if (isClockistry) {
+        digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'failed');
+    } else {
+        digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'failed');
+    }
 
     // Forward to Clockistry if applicable
     if (isClockistry) {

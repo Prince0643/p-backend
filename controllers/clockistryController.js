@@ -3,6 +3,7 @@ const axios = require('axios');
 const paymongoService = require('../services/paymongoService');
 const { generateId } = require('../utils/helpers');
 const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
+const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 
 // Pricing configuration
 const USD_TO_PHP_RATE = 58;
@@ -112,6 +113,21 @@ exports.createPaymentIntent = async (req, res) => {
             userCount: count,
             amount: totalAmount,
             transactionId: internalTransactionId
+        });
+
+        digitalSolutionsStore.recordTransaction({
+            type: 'clockistry_subscription',
+            transactionId: internalTransactionId,
+            companyId,
+            userId,
+            plan,
+            userCount: count,
+            customerEmail: customerEmail || undefined,
+            customerName: customerName || undefined,
+            amount: totalAmount / 100,
+            currency: 'PHP',
+            source: 'clockistry',
+            status: 'initiated'
         });
 
         res.status(200).json({

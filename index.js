@@ -126,11 +126,14 @@ app.use((req, res) => {
     res.status(404).json({ error: 'Endpoint not found' });
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📝 Environment: ${process.env.NODE_ENV}`);
-    console.log(`💰 PayMongo integration ready`);
-});
+// Start server (skipped when required as a module, e.g. by the test suite, so
+// importing `app` never binds a real port or collides with an already-running server).
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`🚀 Server running on port ${PORT}`);
+        console.log(`📝 Environment: ${process.env.NODE_ENV}`);
+        console.log(`💰 PayMongo integration ready`);
+    });
+}
 
 module.exports = app;

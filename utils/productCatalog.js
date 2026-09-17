@@ -1,17 +1,4 @@
-const fs = require('fs');
-const path = require('path');
-
-const CATALOG_PATH = process.env.PRODUCT_CATALOG_PATH
-    ? path.resolve(process.env.PRODUCT_CATALOG_PATH)
-    : path.join(__dirname, '..', 'data', 'products.json');
-
-function safeJsonParse(raw) {
-    try {
-        return { ok: true, value: JSON.parse(raw) };
-    } catch (err) {
-        return { ok: false, error: err };
-    }
-}
+const pool = require('../db/pool');
 
 function toSlugId(input) {
     return String(input || '')
@@ -23,7 +10,7 @@ function toSlugId(input) {
         .slice(0, 80);
 }
 
-function normalizeProduct(product) {
+function normalizeProductInput(product) {
     if (!product || typeof product !== 'object') {
         throw new Error('Invalid product payload');
     }
@@ -61,7 +48,7 @@ function normalizeProduct(product) {
         throw new Error('defaults.cancelUrl must start with http:// or https://');
     }
 
-    const taxRate = defaults.taxRate != null ? Number(defaults.taxRate) : undefined;
+    const taxRate = defaults.taxRate != null ? Number(defaults.taxRate) : null;
     if (taxRate != null && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1)) {
         throw new Error('defaults.taxRate must be a number between 0 and 1');
     }
@@ -71,92 +58,88 @@ function normalizeProduct(product) {
         name,
         amountPhp,
         currency,
+        billingType,
+        billingInterval: billingType === 'recurring' ? interval : null,
+        paymentMethod: defaults.paymentMethod ? String(defaults.paymentMethod) : 'all',
+        source: defaults.source ? String(defaults.source) : id,
+        taxRate,
+        displaySuffix: defaults.displaySuffix ? String(defaults.displaySuffix) : '',
+        successUrl: successUrl || null,
+        cancelUrl: cancelUrl || null
+    };
+}
+
+function rowToProduct(row) {
+    return {
+        id: row.id,
+        name: row.name,
+        amountPhp: Number(row.amount_php),
+        currency: row.currency,
         billing: {
-            type: billingType,
-            interval: billingType === 'recurring' ? interval : undefined
+            type: row.billing_type,
+            interval: row.billing_type === 'recurring' ? row.billing_interval : undefined
         },
         defaults: {
-            paymentMethod: defaults.paymentMethod ? String(defaults.paymentMethod) : 'all',
-            source: defaults.source ? String(defaults.source) : id,
-            taxRate: taxRate != null ? taxRate : undefined,
-            displaySuffix: defaults.displaySuffix ? String(defaults.displaySuffix) : '',
-            successUrl: successUrl || undefined,
-            cancelUrl: cancelUrl || undefined
+            paymentMethod: row.default_payment_method || 'all',
+            source: row.default_source || row.id,
+            taxRate: row.default_tax_rate != null ? Number(row.default_tax_rate) : undefined,
+            displaySuffix: row.display_suffix || '',
+            successUrl: row.success_url || undefined,
+            cancelUrl: row.cancel_url || undefined
         }
     };
 }
 
-function readCatalog() {
-    const raw = fs.readFileSync(CATALOG_PATH, 'utf8');
-    const parsed = safeJsonParse(raw);
-    if (!parsed.ok) {
-        throw new Error(`Failed to parse product catalog JSON at ${CATALOG_PATH}: ${parsed.error.message}`);
-    }
-
-    const catalog = parsed.value;
-    const products = Array.isArray(catalog?.products) ? catalog.products : [];
-
-    return {
-        version: Number(catalog?.version || 1),
-        products
-    };
+async function listProducts() {
+    const { rows } = await pool.query('SELECT * FROM products ORDER BY name ASC');
+    return rows.map(rowToProduct);
 }
 
-function writeCatalog(catalog) {
-    const dir = path.dirname(CATALOG_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    const tmpPath = `${CATALOG_PATH}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(catalog, null, 2) + '\n', 'utf8');
-    fs.renameSync(tmpPath, CATALOG_PATH);
-}
-
-function listProducts() {
-    const catalog = readCatalog();
-    const normalized = catalog.products.map(normalizeProduct);
-    normalized.sort((a, b) => a.name.localeCompare(b.name));
-    return normalized;
-}
-
-function findProduct({ productId, productName }) {
-    const products = listProducts();
+async function findProduct({ productId, productName }) {
     if (productId) {
         const id = toSlugId(productId);
-        return products.find(p => p.id === id) || null;
+        const { rows } = await pool.query('SELECT * FROM products WHERE id = $1', [id]);
+        return rows[0] ? rowToProduct(rows[0]) : null;
     }
     if (productName) {
-        const name = String(productName).trim();
-        return products.find(p => p.name === name) || null;
+        const { rows } = await pool.query('SELECT * FROM products WHERE name = $1', [String(productName).trim()]);
+        return rows[0] ? rowToProduct(rows[0]) : null;
     }
     return null;
 }
 
-function upsertProduct(payload) {
-    const incoming = normalizeProduct(payload);
-    const catalog = readCatalog();
+async function upsertProduct(payload) {
+    const p = normalizeProductInput(payload);
 
-    const existingIndex = Array.isArray(catalog.products)
-        ? catalog.products.findIndex(p => toSlugId(p.id) === incoming.id)
-        : -1;
+    await pool.query(
+        `INSERT INTO products (id, name, amount_php, currency, billing_type, billing_interval, default_payment_method, default_source, default_tax_rate, display_suffix, success_url, cancel_url, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+         ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            amount_php = EXCLUDED.amount_php,
+            currency = EXCLUDED.currency,
+            billing_type = EXCLUDED.billing_type,
+            billing_interval = EXCLUDED.billing_interval,
+            default_payment_method = EXCLUDED.default_payment_method,
+            default_source = EXCLUDED.default_source,
+            default_tax_rate = EXCLUDED.default_tax_rate,
+            display_suffix = EXCLUDED.display_suffix,
+            success_url = EXCLUDED.success_url,
+            cancel_url = EXCLUDED.cancel_url,
+            updated_at = now()`,
+        [
+            p.id, p.name, p.amountPhp, p.currency, p.billingType, p.billingInterval,
+            p.paymentMethod, p.source, p.taxRate, p.displaySuffix, p.successUrl, p.cancelUrl
+        ]
+    );
 
-    const nextProducts = Array.isArray(catalog.products) ? [...catalog.products] : [];
-    if (existingIndex >= 0) {
-        nextProducts[existingIndex] = incoming;
-    } else {
-        nextProducts.push(incoming);
-    }
-
-    writeCatalog({ version: catalog.version || 1, products: nextProducts });
-    return incoming;
+    return findProduct({ productId: p.id });
 }
 
-function deleteProduct(productId) {
+async function deleteProduct(productId) {
     const id = toSlugId(productId);
-    const catalog = readCatalog();
-    const nextProducts = (Array.isArray(catalog.products) ? catalog.products : []).filter(p => toSlugId(p.id) !== id);
-    if (nextProducts.length === (catalog.products || []).length) return false;
-    writeCatalog({ version: catalog.version || 1, products: nextProducts });
-    return true;
+    const { rowCount } = await pool.query('DELETE FROM products WHERE id = $1', [id]);
+    return rowCount > 0;
 }
 
 function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalsolutions.com' } = {}) {
@@ -224,7 +207,6 @@ function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalso
 }
 
 module.exports = {
-    CATALOG_PATH,
     toSlugId,
     listProducts,
     findProduct,

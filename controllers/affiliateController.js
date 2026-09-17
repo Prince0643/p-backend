@@ -6,29 +6,29 @@ const couponStore = require('../utils/couponStore');
 const AFFILIATE_DISCOUNT_PERCENT = 0.15;
 const AFFILIATE_FEE_PERCENT = 0.10;
 
-function generateUniqueCouponCode(seed) {
+async function generateUniqueCouponCode(seed) {
     const base = String(seed || 'AFF').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'AFF';
     for (let i = 0; i < 10; i++) {
         const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
         const code = `${base}${suffix}`;
-        if (!couponStore.findCoupon(code)) return code;
+        if (!(await couponStore.findCoupon(code))) return code;
     }
     throw new Error('Failed to generate a unique coupon code, please retry');
 }
 
 // POST /api/affiliates/register (public)
-exports.register = (req, res) => {
+exports.register = async (req, res) => {
     try {
         const normalized = affiliateStore.normalizeAffiliate(req.body);
 
-        if (affiliateStore.findAffiliateByEmail(normalized.email)) {
+        if (await affiliateStore.findAffiliateByEmail(normalized.email)) {
             return res.status(409).json({ error: 'This email is already registered as an affiliate' });
         }
 
-        const couponCode = generateUniqueCouponCode(`${normalized.firstName}${normalized.lastName}`);
+        const couponCode = await generateUniqueCouponCode(`${normalized.firstName}${normalized.lastName}`);
 
         // One-time-use: this code is meant to be shared with exactly one customer.
-        couponStore.upsertCoupon({
+        await couponStore.upsertCoupon({
             code: couponCode,
             discountPercent: AFFILIATE_DISCOUNT_PERCENT,
             affiliateFeePercent: AFFILIATE_FEE_PERCENT,
@@ -39,7 +39,7 @@ exports.register = (req, res) => {
             notes: `Auto-generated for affiliate ${normalized.firstName} ${normalized.lastName} (${normalized.email}) on registration`
         });
 
-        const affiliate = affiliateStore.createAffiliate(normalized, couponCode);
+        const affiliate = await affiliateStore.createAffiliate(normalized, couponCode);
 
         res.status(201).json({
             success: true,
@@ -54,9 +54,9 @@ exports.register = (req, res) => {
 };
 
 // GET /api/admin/affiliates (admin)
-exports.list = (req, res) => {
+exports.list = async (req, res) => {
     try {
-        const affiliates = affiliateStore.listAffiliates();
+        const affiliates = await affiliateStore.listAffiliates();
         res.json({ success: true, affiliates });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list affiliates' });
@@ -64,12 +64,12 @@ exports.list = (req, res) => {
 };
 
 // GET /api/admin/affiliates/:id (admin)
-exports.getOne = (req, res) => {
+exports.getOne = async (req, res) => {
     try {
-        const affiliate = affiliateStore.findAffiliateById(req.params.id);
+        const affiliate = await affiliateStore.findAffiliateById(req.params.id);
         if (!affiliate) return res.status(404).json({ error: 'Affiliate not found' });
 
-        const coupon = affiliate.couponCode ? couponStore.findCoupon(affiliate.couponCode) : null;
+        const coupon = affiliate.couponCode ? await couponStore.findCoupon(affiliate.couponCode) : null;
         res.json({ success: true, affiliate, coupon });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to get affiliate' });
@@ -79,16 +79,16 @@ exports.getOne = (req, res) => {
 // PATCH /api/admin/affiliates/:id/status (admin)
 // Suspending/terminating an affiliate deactivates their coupon so it stops working
 // immediately; reactivating flips it back on (still subject to its own redemption cap).
-exports.updateStatus = (req, res) => {
+exports.updateStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        const affiliate = affiliateStore.setAffiliateStatus(req.params.id, status);
+        const affiliate = await affiliateStore.setAffiliateStatus(req.params.id, status);
         if (!affiliate) return res.status(404).json({ error: 'Affiliate not found' });
 
         if (affiliate.couponCode) {
-            const coupon = couponStore.findCoupon(affiliate.couponCode);
+            const coupon = await couponStore.findCoupon(affiliate.couponCode);
             if (coupon) {
-                couponStore.upsertCoupon({ ...coupon, active: status === 'active' });
+                await couponStore.upsertCoupon({ ...coupon, active: status === 'active' });
             }
         }
 

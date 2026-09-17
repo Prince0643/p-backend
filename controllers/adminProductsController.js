@@ -14,18 +14,18 @@ function getBackendUrl(req) {
     return `${proto}://${host}`.replace(/\/+$/, '');
 }
 
-exports.list = (req, res) => {
+exports.list = async (req, res) => {
     try {
-        const products = listProducts();
+        const products = await listProducts();
         res.json({ success: true, products });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list products' });
     }
 };
 
-exports.getOne = (req, res) => {
+exports.getOne = async (req, res) => {
     try {
-        const product = findProduct({ productId: req.params.id });
+        const product = await findProduct({ productId: req.params.id });
         if (!product) return res.status(404).json({ error: 'Product not found' });
         res.json({ success: true, product });
     } catch (err) {
@@ -33,18 +33,18 @@ exports.getOne = (req, res) => {
     }
 };
 
-exports.upsert = (req, res) => {
+exports.upsert = async (req, res) => {
     try {
-        const saved = upsertProduct({ ...req.body, id: req.params.id || req.body?.id });
+        const saved = await upsertProduct({ ...req.body, id: req.params.id || req.body?.id });
         res.json({ success: true, product: saved });
     } catch (err) {
         res.status(400).json({ error: err.message || 'Failed to save product' });
     }
 };
 
-exports.remove = (req, res) => {
+exports.remove = async (req, res) => {
     try {
-        const ok = deleteProduct(req.params.id);
+        const ok = await deleteProduct(req.params.id);
         if (!ok) return res.status(404).json({ error: 'Product not found' });
         res.json({ success: true });
     } catch (err) {
@@ -52,9 +52,9 @@ exports.remove = (req, res) => {
     }
 };
 
-exports.snippet = (req, res) => {
+exports.snippet = async (req, res) => {
     try {
-        const product = findProduct({ productId: req.params.id });
+        const product = await findProduct({ productId: req.params.id });
         if (!product) return res.status(404).json({ error: 'Product not found' });
 
         const backendUrl = (req.query.backendUrl ? String(req.query.backendUrl) : getBackendUrl(req)).replace(/\/+$/, '');
@@ -64,4 +64,3 @@ exports.snippet = (req, res) => {
         res.status(500).json({ error: err.message || 'Failed to generate snippet' });
     }
 };
-

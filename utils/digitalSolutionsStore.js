@@ -1,44 +1,30 @@
 // utils/digitalSolutionsStore.js
 //
-// Local ledger of every "digital solution" transaction this backend processes -
+// Relational ledger of every "digital solution" transaction this backend processes -
 // Nexistry Academy product purchases and Clockistry/Nexiflow subscription upgrades.
-// Replaces the manual Google Sheets tracking described for the Nexiflow app and
-// digital solution tracker: this backend forwards webhooks and forgets today, so
-// nothing here previously persisted what was actually sold, to whom, or its status.
-const fs = require('fs');
-const path = require('path');
+const pool = require('../db/pool');
 
-const STORE_PATH = process.env.DIGITAL_SOLUTIONS_STORE_PATH
-    ? path.resolve(process.env.DIGITAL_SOLUTIONS_STORE_PATH)
-    : path.join(__dirname, '..', 'data', 'digital_solutions.json');
-
-function safeJsonParse(raw) {
-    try {
-        return { ok: true, value: JSON.parse(raw) };
-    } catch (err) {
-        return { ok: false, error: err };
-    }
-}
-
-function readStore() {
-    try {
-        const raw = fs.readFileSync(STORE_PATH, 'utf8');
-        const parsed = safeJsonParse(raw);
-        if (!parsed.ok) throw new Error(`Failed to parse JSON at ${STORE_PATH}: ${parsed.error.message}`);
-        const transactions = Array.isArray(parsed.value?.transactions) ? parsed.value.transactions : [];
-        return { version: Number(parsed.value?.version || 1), transactions };
-    } catch (err) {
-        if (err.code === 'ENOENT') return { version: 1, transactions: [] };
-        throw err;
-    }
-}
-
-function writeStore(store) {
-    const dir = path.dirname(STORE_PATH);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const tmpPath = `${STORE_PATH}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(store, null, 2) + '\n', 'utf8');
-    fs.renameSync(tmpPath, STORE_PATH);
+function rowToTransaction(row) {
+    return {
+        id: row.id,
+        type: row.type,
+        transactionId: row.transaction_id,
+        customerEmail: row.customer_email || '',
+        customerName: row.customer_name || '',
+        companyId: row.company_id || undefined,
+        userId: row.user_id || undefined,
+        productId: row.product_id || undefined,
+        productName: row.product_name || undefined,
+        plan: row.plan || undefined,
+        userCount: row.user_count != null ? Number(row.user_count) : undefined,
+        amount: row.amount != null ? Number(row.amount) : undefined,
+        currency: row.currency,
+        promoCode: row.promo_code || undefined,
+        source: row.source || undefined,
+        status: row.status,
+        createdAt: new Date(row.created_at).toISOString(),
+        updatedAt: new Date(row.updated_at).toISOString()
+    };
 }
 
 /**
@@ -47,34 +33,32 @@ function writeStore(store) {
  * value used to find and update this record later (paymentReference for Academy,
  * internal_transaction_id for Clockistry).
  */
-function recordTransaction(entry) {
-    const store = readStore();
+async function recordTransaction(entry) {
+    const id = `DST${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
-    const record = {
-        id: `DST${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-        type: entry.type,
-        transactionId: String(entry.transactionId || ''),
-        customerEmail: entry.customerEmail ? String(entry.customerEmail).toLowerCase() : '',
-        customerName: entry.customerName ? String(entry.customerName) : '',
-        companyId: entry.companyId ? String(entry.companyId) : undefined,
-        userId: entry.userId ? String(entry.userId) : undefined,
-        productId: entry.productId ? String(entry.productId) : undefined,
-        productName: entry.productName ? String(entry.productName) : undefined,
-        plan: entry.plan ? String(entry.plan) : undefined,
-        userCount: entry.userCount != null ? Number(entry.userCount) : undefined,
-        amount: entry.amount != null ? Number(entry.amount) : undefined,
-        currency: entry.currency ? String(entry.currency).toUpperCase() : 'PHP',
-        promoCode: entry.promoCode ? String(entry.promoCode) : undefined,
-        source: entry.source ? String(entry.source) : undefined,
-        status: entry.status || 'initiated',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-    };
-    Object.keys(record).forEach((k) => record[k] === undefined && delete record[k]);
-
-    store.transactions.push(record);
-    writeStore({ version: store.version || 1, transactions: store.transactions });
-    return record;
+    const { rows } = await pool.query(
+        `INSERT INTO digital_solutions_transactions
+            (id, type, transaction_id, customer_email, customer_name, company_id, user_id, product_id, product_name, plan, user_count, amount, currency, promo_code, source, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+         RETURNING *`,
+        [
+            id, entry.type, String(entry.transactionId || ''),
+            entry.customerEmail ? String(entry.customerEmail).toLowerCase() : null,
+            entry.customerName ? String(entry.customerName) : null,
+            entry.companyId ? String(entry.companyId) : null,
+            entry.userId ? String(entry.userId) : null,
+            entry.productId ? String(entry.productId) : null,
+            entry.productName ? String(entry.productName) : null,
+            entry.plan ? String(entry.plan) : null,
+            entry.userCount != null ? Number(entry.userCount) : null,
+            entry.amount != null ? Number(entry.amount) : null,
+            entry.currency ? String(entry.currency).toUpperCase() : 'PHP',
+            entry.promoCode ? String(entry.promoCode) : null,
+            entry.source ? String(entry.source) : null,
+            entry.status || 'initiated'
+        ]
+    );
+    return rowToTransaction(rows[0]);
 }
 
 /**
@@ -82,44 +66,36 @@ function recordTransaction(entry) {
  * the PayMongo webhook reports paid/failed. No-op (returns null) if the
  * transaction isn't found - e.g. it predates this tracker.
  */
-function updateTransactionStatus(transactionId, status, extra = {}) {
+async function updateTransactionStatus(transactionId, status) {
     const id = String(transactionId || '');
     if (!id) return null;
 
-    const store = readStore();
-    const index = store.transactions.findIndex((t) => t.transactionId === id);
-    if (index === -1) return null;
-
-    const updated = {
-        ...store.transactions[index],
-        ...extra,
-        status,
-        updatedAt: new Date().toISOString()
-    };
-    store.transactions[index] = updated;
-    writeStore({ version: store.version || 1, transactions: store.transactions });
-    return updated;
+    const { rows } = await pool.query(
+        `UPDATE digital_solutions_transactions SET status = $2, updated_at = now() WHERE transaction_id = $1 RETURNING *`,
+        [id, status]
+    );
+    return rows[0] ? rowToTransaction(rows[0]) : null;
 }
 
-function listTransactions({ type, status, companyId, email } = {}) {
-    const { transactions } = readStore();
-    const normalizedEmail = email ? String(email).toLowerCase() : null;
+async function listTransactions({ type, status, companyId, email } = {}) {
+    const conditions = [];
+    const params = [];
+    if (type) { params.push(type); conditions.push(`type = $${params.length}`); }
+    if (status) { params.push(status); conditions.push(`status = $${params.length}`); }
+    if (companyId) { params.push(companyId); conditions.push(`company_id = $${params.length}`); }
+    if (email) { params.push(String(email).toLowerCase()); conditions.push(`customer_email = $${params.length}`); }
 
-    return transactions
-        .filter((t) => (type ? t.type === type : true))
-        .filter((t) => (status ? t.status === status : true))
-        .filter((t) => (companyId ? t.companyId === companyId : true))
-        .filter((t) => (normalizedEmail ? t.customerEmail === normalizedEmail : true))
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await pool.query(`SELECT * FROM digital_solutions_transactions ${where} ORDER BY created_at DESC`, params);
+    return rows.map(rowToTransaction);
 }
 
-function findByTransactionId(transactionId) {
-    const { transactions } = readStore();
-    return transactions.find((t) => t.transactionId === String(transactionId || '')) || null;
+async function findByTransactionId(transactionId) {
+    const { rows } = await pool.query('SELECT * FROM digital_solutions_transactions WHERE transaction_id = $1', [String(transactionId || '')]);
+    return rows[0] ? rowToTransaction(rows[0]) : null;
 }
 
 module.exports = {
-    STORE_PATH,
     recordTransaction,
     updateTransactionStatus,
     listTransactions,

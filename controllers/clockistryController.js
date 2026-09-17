@@ -115,7 +115,7 @@ exports.createPaymentIntent = async (req, res) => {
             transactionId: internalTransactionId
         });
 
-        digitalSolutionsStore.recordTransaction({
+        await digitalSolutionsStore.recordTransaction({
             type: 'clockistry_subscription',
             transactionId: internalTransactionId,
             companyId,

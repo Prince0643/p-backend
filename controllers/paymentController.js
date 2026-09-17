@@ -10,10 +10,10 @@ const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleSto
 const couponStore = require('../utils/couponStore');
 const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 
-function resolveCatalogProduct({ productId, productName }) {
-    const byId = productId ? findProduct({ productId }) : null;
+async function resolveCatalogProduct({ productId, productName }) {
+    const byId = productId ? await findProduct({ productId }) : null;
     if (byId) return byId;
-    const byName = productName ? findProduct({ productName }) : null;
+    const byName = productName ? await findProduct({ productName }) : null;
     if (byName) return byName;
     return null;
 }
@@ -67,7 +67,7 @@ exports.createPaymentIntent = async (req, res) => {
         }
 
         // Product lookup (catalog-backed)
-        const catalogProduct = resolveCatalogProduct({ productId, productName: normalizedProduct });
+        const catalogProduct = await resolveCatalogProduct({ productId, productName: normalizedProduct });
         if (!catalogProduct) {
             return res.status(400).json({ error: 'Invalid product. Add it in /admin/products first.' });
         }
@@ -90,7 +90,7 @@ exports.createPaymentIntent = async (req, res) => {
         const normalizedPromoCode = promoCode ? String(promoCode).trim() : '';
 
         if (normalizedPromoCode) {
-            const validation = couponStore.validateCouponForCharge({
+            const validation = await couponStore.validateCouponForCharge({
                 code: normalizedPromoCode,
                 productId: catalogProduct.id
             });
@@ -239,7 +239,7 @@ exports.createPaymentIntent = async (req, res) => {
 
         console.log('Payment intent created:', paymentIntent.id);
 
-        digitalSolutionsStore.recordTransaction({
+        await digitalSolutionsStore.recordTransaction({
             type: 'academy_product',
             transactionId: paymentReference,
             customerEmail: email,
@@ -572,9 +572,9 @@ async function handlePaymentSuccess(attributes) {
     const isClockistry = metadata.source === 'clockistry';
 
     if (isClockistry) {
-        digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'paid');
+        await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'paid');
     } else {
-        digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'paid');
+        await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'paid');
     }
 
     // Forward to Clockistry if applicable
@@ -598,12 +598,12 @@ async function handlePaymentSuccess(attributes) {
     // generate a payout obligation. Independent of GHL config so it always tracks payouts.
     if (metadata.promoCode) {
         try {
-            const coupon = couponStore.findCoupon(metadata.promoCode);
+            const coupon = await couponStore.findCoupon(metadata.promoCode);
             if (coupon) {
                 const redemptionBaseAmount = Number(metadata.baseAmount) || 0;
                 const affiliateFeeAmount = Number((redemptionBaseAmount * coupon.affiliateFeePercent).toFixed(2));
 
-                couponStore.recordRedemption({
+                await couponStore.recordRedemption({
                     code: coupon.code,
                     paymentReference: metadata.paymentReference,
                     productId: metadata.productId,
@@ -636,7 +636,7 @@ async function handlePaymentSuccess(attributes) {
             const phone = metadata.mobile;
             const product = metadata.product;
             const productId = metadata.productId;
-            const catalogProduct = resolveCatalogProduct({ productId, productName: product });
+            const catalogProduct = await resolveCatalogProduct({ productId, productName: product });
 
             const upsertResult = await ghlService.upsertContact({
                 fullName,
@@ -711,7 +711,7 @@ async function handlePaymentSuccess(attributes) {
                 try {
                     const isRecurring = String(catalogProduct?.billing?.type || 'one_time') === 'recurring';
                     if (isRecurring && contactId && catalogProduct?.id) {
-                        const existingScheduleId = getScheduleId({
+                        const existingScheduleId = await getScheduleId({
                             locationId: process.env.GHL_LOCATION_ID,
                             contactId,
                             productId: catalogProduct.id
@@ -759,7 +759,7 @@ async function handlePaymentSuccess(attributes) {
 
                             const scheduleId = schedule?._id || schedule?.id || schedule?.schedule?._id || schedule?.schedule?.id;
                             if (scheduleId) {
-                                setScheduleId({
+                                await setScheduleId({
                                     locationId: process.env.GHL_LOCATION_ID,
                                     contactId,
                                     productId: catalogProduct.id,
@@ -808,9 +808,9 @@ async function handlePaymentFailure(attributes) {
     const isClockistry = metadata.source === 'clockistry';
 
     if (isClockistry) {
-        digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'failed');
+        await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'failed');
     } else {
-        digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'failed');
+        await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'failed');
     }
 
     // Forward to Clockistry if applicable

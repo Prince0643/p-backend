@@ -1,53 +1,11 @@
 // utils/affiliateStore.js
-const fs = require('fs');
-const path = require('path');
+const pool = require('../db/pool');
 const { validateEmail } = require('./helpers');
-
-const AFFILIATES_PATH = process.env.AFFILIATE_STORE_PATH
-    ? path.resolve(process.env.AFFILIATE_STORE_PATH)
-    : path.join(__dirname, '..', 'data', 'affiliates.json');
 
 const PH_EWALLET_METHODS = ['GCASH', 'MAYA'];
 const PH_BANK_METHODS = ['BDO', 'BPI', 'METROBANK', 'LANDBANK', 'PNB', 'UNIONBANK', 'SECURITY_BANK', 'RCBC', 'OTHER'];
 const GLOBAL_METHODS = ['WISE', 'PAYPAL'];
-
-function safeJsonParse(raw) {
-    try {
-        return { ok: true, value: JSON.parse(raw) };
-    } catch (err) {
-        return { ok: false, error: err };
-    }
-}
-
-function readJsonFile(filePath, defaultValue) {
-    try {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        const parsed = safeJsonParse(raw);
-        if (!parsed.ok) throw new Error(`Failed to parse JSON at ${filePath}: ${parsed.error.message}`);
-        return parsed.value;
-    } catch (err) {
-        if (err.code === 'ENOENT') return defaultValue;
-        throw err;
-    }
-}
-
-function writeJsonFile(filePath, data) {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const tmpPath = `${filePath}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf8');
-    fs.renameSync(tmpPath, filePath);
-}
-
-function readStore() {
-    const store = readJsonFile(AFFILIATES_PATH, { version: 1, affiliates: [] });
-    const affiliates = Array.isArray(store?.affiliates) ? store.affiliates : [];
-    return { version: Number(store?.version || 1), affiliates };
-}
-
-function writeStore(store) {
-    writeJsonFile(AFFILIATES_PATH, store);
-}
+const AFFILIATE_STATUSES = ['active', 'suspended', 'terminated'];
 
 function requireString(value, fieldName) {
     const str = String(value ?? '').trim();
@@ -129,71 +87,78 @@ function normalizeAffiliate(payload) {
     const termsVersion = payload.termsVersion ? String(payload.termsVersion).trim() : '';
 
     return {
-        firstName,
-        lastName,
-        email,
-        contactNumber,
-        socials,
-        paymentRegion,
-        preferredBank,
-        payoutDetails,
-        termsAccepted: true,
-        termsVersion
+        firstName, lastName, email, contactNumber, socials,
+        paymentRegion, preferredBank, payoutDetails,
+        termsAccepted: true, termsVersion
     };
 }
 
-function listAffiliates() {
-    const { affiliates } = readStore();
-    return affiliates.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+function rowToAffiliate(row) {
+    return {
+        id: row.id,
+        firstName: row.first_name,
+        lastName: row.last_name,
+        email: row.email,
+        contactNumber: row.contact_number,
+        socials: row.socials || {},
+        paymentRegion: row.payment_region,
+        preferredBank: row.preferred_bank,
+        payoutDetails: row.payout_details || {},
+        termsAccepted: row.terms_accepted,
+        termsVersion: row.terms_version || '',
+        couponCode: row.coupon_code || null,
+        status: row.status,
+        statusUpdatedAt: row.status_updated_at ? new Date(row.status_updated_at).toISOString() : null,
+        createdAt: new Date(row.created_at).toISOString()
+    };
 }
 
-function findAffiliateByEmail(email) {
+async function listAffiliates() {
+    const { rows } = await pool.query('SELECT * FROM affiliates ORDER BY created_at DESC');
+    return rows.map(rowToAffiliate);
+}
+
+async function findAffiliateByEmail(email) {
     const normalized = String(email || '').trim().toLowerCase();
     if (!normalized) return null;
-    const { affiliates } = readStore();
-    return affiliates.find((a) => a.email === normalized) || null;
+    const { rows } = await pool.query('SELECT * FROM affiliates WHERE email = $1', [normalized]);
+    return rows[0] ? rowToAffiliate(rows[0]) : null;
 }
 
-function findAffiliateById(id) {
-    const { affiliates } = readStore();
-    return affiliates.find((a) => a.id === id) || null;
+async function findAffiliateById(id) {
+    const { rows } = await pool.query('SELECT * FROM affiliates WHERE id = $1', [id]);
+    return rows[0] ? rowToAffiliate(rows[0]) : null;
 }
 
-function createAffiliate(normalized, couponCode) {
-    const store = readStore();
+async function createAffiliate(normalized, couponCode) {
     const id = `AFF${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
-    const record = {
-        id,
-        ...normalized,
-        couponCode,
-        status: 'active',
-        createdAt: new Date().toISOString()
-    };
-
-    store.affiliates.push(record);
-    writeStore({ version: store.version || 1, affiliates: store.affiliates });
-    return record;
+    const { rows } = await pool.query(
+        `INSERT INTO affiliates (id, first_name, last_name, email, contact_number, socials, payment_region, preferred_bank, payout_details, terms_accepted, terms_version, coupon_code, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'active')
+         RETURNING *`,
+        [
+            id, normalized.firstName, normalized.lastName, normalized.email, normalized.contactNumber,
+            JSON.stringify(normalized.socials || {}), normalized.paymentRegion, normalized.preferredBank,
+            JSON.stringify(normalized.payoutDetails || {}), normalized.termsAccepted, normalized.termsVersion || null,
+            couponCode
+        ]
+    );
+    return rowToAffiliate(rows[0]);
 }
 
-const AFFILIATE_STATUSES = ['active', 'suspended', 'terminated'];
-
-function setAffiliateStatus(id, status) {
+async function setAffiliateStatus(id, status) {
     if (!AFFILIATE_STATUSES.includes(status)) {
         throw new Error(`status must be one of ${AFFILIATE_STATUSES.join(', ')}`);
     }
-    const store = readStore();
-    const index = store.affiliates.findIndex((a) => a.id === id);
-    if (index === -1) return null;
-
-    const updated = { ...store.affiliates[index], status, statusUpdatedAt: new Date().toISOString() };
-    store.affiliates[index] = updated;
-    writeStore({ version: store.version || 1, affiliates: store.affiliates });
-    return updated;
+    const { rows } = await pool.query(
+        `UPDATE affiliates SET status = $2, status_updated_at = now() WHERE id = $1 RETURNING *`,
+        [id, status]
+    );
+    return rows[0] ? rowToAffiliate(rows[0]) : null;
 }
 
 module.exports = {
-    AFFILIATES_PATH,
     PH_EWALLET_METHODS,
     PH_BANK_METHODS,
     GLOBAL_METHODS,

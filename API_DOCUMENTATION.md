@@ -384,6 +384,14 @@ To integrate your system with this backend, the following configurations must be
 
 ### Required Environment Variables
 
+#### Database (Required)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string, e.g. `postgres://user:password@host:5432/dbname`. All product, coupon, affiliate, and digital-solutions data lives in Postgres now (see `db/schema.sql`) — the old `data/*.json` files are only used as a one-time seed source by `db/migrate.js`. |
+
+Run `npm run migrate` (i.e. `node db/migrate.js`) once against a fresh database to create the schema (`db/schema.sql`) and import any existing `data/*.json` content. Safe to re-run — inserts are `ON CONFLICT DO NOTHING`/idempotent.
+
 #### PayMongo Configuration
 
 | Variable | Required | Description |
@@ -448,6 +456,9 @@ Until this is set, `/api/payments/webhook` accepts any request body with no auth
 # Server
 NODE_ENV=production
 PORT=3000
+
+# Database (required)
+DATABASE_URL=postgres://user:password@host:5432/dbname
 
 # CORS - Add your system's origin here
 ALLOWED_ORIGINS=https://yoursystem.com,https://app.yoursystem.com

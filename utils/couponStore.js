@@ -1,50 +1,11 @@
 // utils/couponStore.js
-const fs = require('fs');
-const path = require('path');
-
-const COUPONS_PATH = process.env.COUPON_CATALOG_PATH
-    ? path.resolve(process.env.COUPON_CATALOG_PATH)
-    : path.join(__dirname, '..', 'data', 'coupons.json');
-
-const REDEMPTIONS_PATH = process.env.COUPON_REDEMPTIONS_PATH
-    ? path.resolve(process.env.COUPON_REDEMPTIONS_PATH)
-    : path.join(__dirname, '..', 'data', 'coupon_redemptions.json');
-
-function safeJsonParse(raw) {
-    try {
-        return { ok: true, value: JSON.parse(raw) };
-    } catch (err) {
-        return { ok: false, error: err };
-    }
-}
+const pool = require('../db/pool');
 
 function toCouponCode(input) {
     return String(input || '')
         .trim()
         .toUpperCase()
         .replace(/[^A-Z0-9_-]+/g, '');
-}
-
-function readJsonFile(filePath, defaultValue) {
-    try {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        const parsed = safeJsonParse(raw);
-        if (!parsed.ok) {
-            throw new Error(`Failed to parse JSON at ${filePath}: ${parsed.error.message}`);
-        }
-        return parsed.value;
-    } catch (err) {
-        if (err.code === 'ENOENT') return defaultValue;
-        throw err;
-    }
-}
-
-function writeJsonFile(filePath, data) {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const tmpPath = `${filePath}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2) + '\n', 'utf8');
-    fs.renameSync(tmpPath, filePath);
 }
 
 function normalizePercent(value, fieldName, { required = false, defaultValue = 0 } = {}) {
@@ -59,7 +20,7 @@ function normalizePercent(value, fieldName, { required = false, defaultValue = 0
     return num;
 }
 
-function normalizeCoupon(payload) {
+function normalizeCouponInput(payload) {
     if (!payload || typeof payload !== 'object') {
         throw new Error('Invalid coupon payload');
     }
@@ -69,9 +30,7 @@ function normalizeCoupon(payload) {
 
     const discountPercent = normalizePercent(payload.discountPercent, 'discountPercent', { required: true });
     const affiliateFeePercent = normalizePercent(payload.affiliateFeePercent, 'affiliateFeePercent', { defaultValue: 0 });
-
-    const affiliateEmail = payload.affiliateEmail ? String(payload.affiliateEmail).trim() : '';
-
+    const affiliateEmail = payload.affiliateEmail ? String(payload.affiliateEmail).trim() : null;
     const active = payload.active === undefined ? true : Boolean(payload.active);
 
     let expiresAt = null;
@@ -92,84 +51,87 @@ function normalizeCoupon(payload) {
         throw new Error('maxRedemptions must be a positive integer, if set');
     }
 
-    const notes = payload.notes ? String(payload.notes) : '';
+    const notes = payload.notes ? String(payload.notes) : null;
 
+    return { code, discountPercent, affiliateFeePercent, affiliateEmail, active, expiresAt, productIds, maxRedemptions, notes };
+}
+
+function rowToCoupon(row, productIds = []) {
     return {
-        code,
-        discountPercent,
-        affiliateFeePercent,
-        affiliateEmail,
-        active,
-        expiresAt,
+        code: row.code,
+        discountPercent: Number(row.discount_percent),
+        affiliateFeePercent: Number(row.affiliate_fee_percent),
+        affiliateEmail: row.affiliate_email || '',
+        active: row.active,
+        expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
         productIds,
-        maxRedemptions,
-        notes
+        maxRedemptions: row.max_redemptions,
+        notes: row.notes || ''
     };
 }
 
-function readCatalog() {
-    const catalog = readJsonFile(COUPONS_PATH, { version: 1, coupons: [] });
-    const coupons = Array.isArray(catalog?.coupons) ? catalog.coupons : [];
-    return { version: Number(catalog?.version || 1), coupons };
+const COUPON_WITH_PRODUCTS_QUERY = `
+    SELECT c.*, COALESCE(array_agg(cp.product_id) FILTER (WHERE cp.product_id IS NOT NULL), '{}') AS product_ids
+    FROM coupons c
+    LEFT JOIN coupon_products cp ON cp.coupon_code = c.code
+`;
+
+async function listCoupons() {
+    const { rows } = await pool.query(`${COUPON_WITH_PRODUCTS_QUERY} GROUP BY c.code ORDER BY c.code ASC`);
+    return rows.map((r) => rowToCoupon(r, r.product_ids));
 }
 
-function writeCatalog(catalog) {
-    writeJsonFile(COUPONS_PATH, catalog);
-}
-
-function readRedemptions() {
-    const store = readJsonFile(REDEMPTIONS_PATH, { version: 1, redemptions: [] });
-    const redemptions = Array.isArray(store?.redemptions) ? store.redemptions : [];
-    return { version: Number(store?.version || 1), redemptions };
-}
-
-function writeRedemptions(store) {
-    writeJsonFile(REDEMPTIONS_PATH, store);
-}
-
-function listCoupons() {
-    const catalog = readCatalog();
-    const normalized = catalog.coupons.map(normalizeCoupon);
-    normalized.sort((a, b) => a.code.localeCompare(b.code));
-    return normalized;
-}
-
-function findCoupon(code) {
+async function findCoupon(code) {
     const normalizedCode = toCouponCode(code);
     if (!normalizedCode) return null;
-    const coupons = listCoupons();
-    return coupons.find((c) => c.code === normalizedCode) || null;
+    const { rows } = await pool.query(`${COUPON_WITH_PRODUCTS_QUERY} WHERE c.code = $1 GROUP BY c.code`, [normalizedCode]);
+    return rows[0] ? rowToCoupon(rows[0], rows[0].product_ids) : null;
 }
 
-function upsertCoupon(payload) {
-    const incoming = normalizeCoupon(payload);
-    const catalog = readCatalog();
-
-    const existingIndex = catalog.coupons.findIndex((c) => toCouponCode(c.code) === incoming.code);
-    const nextCoupons = [...catalog.coupons];
-    if (existingIndex >= 0) {
-        nextCoupons[existingIndex] = incoming;
-    } else {
-        nextCoupons.push(incoming);
+async function upsertCoupon(payload) {
+    const c = normalizeCouponInput(payload);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(
+            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+             ON CONFLICT (code) DO UPDATE SET
+                discount_percent = EXCLUDED.discount_percent,
+                affiliate_fee_percent = EXCLUDED.affiliate_fee_percent,
+                affiliate_email = EXCLUDED.affiliate_email,
+                active = EXCLUDED.active,
+                expires_at = EXCLUDED.expires_at,
+                max_redemptions = EXCLUDED.max_redemptions,
+                notes = EXCLUDED.notes,
+                updated_at = now()`,
+            [c.code, c.discountPercent, c.affiliateFeePercent, c.affiliateEmail, c.active, c.expiresAt, c.maxRedemptions, c.notes]
+        );
+        await client.query('DELETE FROM coupon_products WHERE coupon_code = $1', [c.code]);
+        for (const productId of c.productIds) {
+            await client.query('INSERT INTO coupon_products (coupon_code, product_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [c.code, productId]);
+        }
+        await client.query('COMMIT');
+    } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+    } finally {
+        client.release();
     }
 
-    writeCatalog({ version: catalog.version || 1, coupons: nextCoupons });
-    return incoming;
+    return findCoupon(c.code);
 }
 
-function deleteCoupon(code) {
+async function deleteCoupon(code) {
     const normalizedCode = toCouponCode(code);
-    const catalog = readCatalog();
-    const nextCoupons = catalog.coupons.filter((c) => toCouponCode(c.code) !== normalizedCode);
-    if (nextCoupons.length === catalog.coupons.length) return false;
-    writeCatalog({ version: catalog.version || 1, coupons: nextCoupons });
-    return true;
+    const { rowCount } = await pool.query('DELETE FROM coupons WHERE code = $1', [normalizedCode]);
+    return rowCount > 0;
 }
 
-function countRedemptions(code) {
+async function countRedemptions(code) {
     const normalizedCode = toCouponCode(code);
-    const { redemptions } = readRedemptions();
-    return redemptions.filter((r) => toCouponCode(r.code) === normalizedCode).length;
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM coupon_redemptions WHERE code = $1', [normalizedCode]);
+    return rows[0].count;
 }
 
 /**
@@ -177,10 +139,10 @@ function countRedemptions(code) {
  * Returns { coupon } on success, or { error, reason } on failure. Never throws for
  * expected validation failures so callers can turn this straight into a 400 response.
  */
-function validateCouponForCharge({ code, productId }) {
+async function validateCouponForCharge({ code, productId }) {
     if (!code) return { error: 'No promo code provided' };
 
-    const coupon = findCoupon(code);
+    const coupon = await findCoupon(code);
     if (!coupon) return { error: 'Invalid promo code', reason: 'not_found' };
 
     if (!coupon.active) return { error: 'This promo code is no longer active', reason: 'inactive' };
@@ -194,7 +156,7 @@ function validateCouponForCharge({ code, productId }) {
     }
 
     if (coupon.maxRedemptions != null) {
-        const used = countRedemptions(coupon.code);
+        const used = await countRedemptions(coupon.code);
         if (used >= coupon.maxRedemptions) {
             return { error: 'This promo code has reached its redemption limit', reason: 'max_redemptions_reached' };
         }
@@ -203,64 +165,67 @@ function validateCouponForCharge({ code, productId }) {
     return { coupon };
 }
 
-function recordRedemption(entry) {
-    const store = readRedemptions();
-    const id = `RDM${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-
-    const record = {
-        id,
-        code: toCouponCode(entry.code),
-        paymentReference: String(entry.paymentReference || ''),
-        productId: String(entry.productId || ''),
-        email: String(entry.email || ''),
-        fullName: String(entry.fullName || ''),
-        baseAmount: Number(entry.baseAmount) || 0,
-        discountAmount: Number(entry.discountAmount) || 0,
-        affiliateFeeAmount: Number(entry.affiliateFeeAmount) || 0,
-        affiliateEmail: String(entry.affiliateEmail || ''),
-        currency: String(entry.currency || 'PHP'),
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        paidAt: null
+function rowToRedemption(row) {
+    return {
+        id: row.id,
+        code: row.code,
+        paymentReference: row.payment_reference,
+        productId: row.product_id || '',
+        email: row.email || '',
+        fullName: row.full_name || '',
+        baseAmount: Number(row.base_amount),
+        discountAmount: Number(row.discount_amount),
+        affiliateFeeAmount: Number(row.affiliate_fee_amount),
+        affiliateEmail: row.affiliate_email || '',
+        currency: row.currency,
+        status: row.status,
+        createdAt: new Date(row.created_at).toISOString(),
+        paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : null
     };
-
-    store.redemptions.push(record);
-    writeRedemptions({ version: store.version || 1, redemptions: store.redemptions });
-    return record;
 }
 
-function listRedemptions({ code, status } = {}) {
-    const { redemptions } = readRedemptions();
-    const normalizedCode = code ? toCouponCode(code) : null;
-
-    return redemptions
-        .filter((r) => (normalizedCode ? toCouponCode(r.code) === normalizedCode : true))
-        .filter((r) => (status ? r.status === status : true))
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+async function recordRedemption(entry) {
+    const id = `RDM${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const { rows } = await pool.query(
+        `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING *`,
+        [
+            id, toCouponCode(entry.code), String(entry.paymentReference || ''), entry.productId || null,
+            entry.email || null, entry.fullName || null, Number(entry.baseAmount) || 0,
+            Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
+            entry.affiliateEmail || null, entry.currency || 'PHP'
+        ]
+    );
+    return rowToRedemption(rows[0]);
 }
 
-function markRedemptionsPaid(ids) {
-    const idSet = new Set((Array.isArray(ids) ? ids : [ids]).map(String));
-    const store = readRedemptions();
-    let updated = 0;
-
-    const nextRedemptions = store.redemptions.map((r) => {
-        if (idSet.has(String(r.id)) && r.status !== 'paid') {
-            updated += 1;
-            return { ...r, status: 'paid', paidAt: new Date().toISOString() };
-        }
-        return r;
-    });
-
-    if (updated > 0) {
-        writeRedemptions({ version: store.version || 1, redemptions: nextRedemptions });
+async function listRedemptions({ code, status } = {}) {
+    const conditions = [];
+    const params = [];
+    if (code) {
+        params.push(toCouponCode(code));
+        conditions.push(`code = $${params.length}`);
     }
-    return updated;
+    if (status) {
+        params.push(status);
+        conditions.push(`status = $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await pool.query(`SELECT * FROM coupon_redemptions ${where} ORDER BY created_at DESC`, params);
+    return rows.map(rowToRedemption);
+}
+
+async function markRedemptionsPaid(ids) {
+    const idList = Array.isArray(ids) ? ids : [ids];
+    const { rowCount } = await pool.query(
+        `UPDATE coupon_redemptions SET status = 'paid', paid_at = now() WHERE id = ANY($1::text[]) AND status != 'paid'`,
+        [idList.map(String)]
+    );
+    return rowCount;
 }
 
 module.exports = {
-    COUPONS_PATH,
-    REDEMPTIONS_PATH,
     toCouponCode,
     listCoupons,
     findCoupon,

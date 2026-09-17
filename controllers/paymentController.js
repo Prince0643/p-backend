@@ -20,6 +20,13 @@ async function resolveCatalogProduct({ productId, productName }) {
 
 // Create payment intent
 exports.createPaymentIntent = async (req, res) => {
+    // Set once a coupon reservation is actually committed (finalizeCouponReservation
+    // succeeds), so the catch block below knows to release it if anything after that
+    // point fails - otherwise a one-time coupon would stay reserved forever for a
+    // checkout that never actually got created. Declared outside the try block so
+    // catch can see it.
+    let reservedPaymentReference = null;
+
     try {
         // ✅ FIXED: Added paymentMethod and source to destructuring
         const {
@@ -86,18 +93,27 @@ exports.createPaymentIntent = async (req, res) => {
         // supplied — the client-sent `amount`/`discountAmount` are never trusted for
         // pricing, only echoed back for display/logging. This closes the hole where a
         // client could set any `amount` up to the catalog max without a real coupon.
+        //
+        // For a coupon with maxRedemptions set, the slot is reserved (as a 'pending'
+        // coupon_redemptions row) right here at checkout creation - not only recorded
+        // after payment.paid fires - so a second concurrent checkout with the same
+        // one-time coupon can't also pass validation before the first one pays.
+        // beginCouponReservation locks the coupon row and holds that lock (via an open
+        // transaction) until finalizeCouponReservation commits the pending row below.
         let appliedCoupon = null;
+        let couponReservationClient = null;
         const normalizedPromoCode = promoCode ? String(promoCode).trim() : '';
 
         if (normalizedPromoCode) {
-            const validation = await couponStore.validateCouponForCharge({
+            const reservation = await couponStore.beginCouponReservation({
                 code: normalizedPromoCode,
                 productId: catalogProduct.id
             });
-            if (!validation.coupon) {
-                return res.status(400).json({ error: validation.error || 'Invalid promo code' });
+            if (!reservation.coupon) {
+                return res.status(400).json({ error: reservation.error || 'Invalid promo code' });
             }
-            appliedCoupon = validation.coupon;
+            appliedCoupon = reservation.coupon;
+            couponReservationClient = reservation.client;
         }
 
         const serverDiscountAmount = appliedCoupon
@@ -109,6 +125,26 @@ exports.createPaymentIntent = async (req, res) => {
         const finalAmount = Number(taxed.totalAmount.toFixed(2));
         const baseAmount = Number(taxed.baseAmount.toFixed(2));
         const taxAmount = Number(taxed.taxAmount.toFixed(2));
+
+        if (appliedCoupon && couponReservationClient) {
+            const affiliateFeeAmount = Number((baseAmount * appliedCoupon.affiliateFeePercent).toFixed(2));
+            await couponStore.finalizeCouponReservation(couponReservationClient, {
+                code: appliedCoupon.code,
+                paymentReference,
+                productId: catalogProduct.id,
+                email,
+                fullName,
+                baseAmount,
+                discountAmount: serverDiscountAmount,
+                affiliateFeeAmount,
+                affiliateEmail: appliedCoupon.affiliateEmail || referredBy || '',
+                currency: productInfo.currency
+            });
+            // finalizeCouponReservation already committed + released the client above.
+            // Track the reference so the catch block can release the hold if anything
+            // after this point (PayMongo call, etc.) fails.
+            reservedPaymentReference = paymentReference;
+        }
 
         console.log('Computed server-side pricing:', {
             catalogAmount: productInfo.amount,
@@ -301,6 +337,11 @@ exports.createPaymentIntent = async (req, res) => {
 
     } catch (error) {
         console.error('Payment intent creation error:', error);
+        if (reservedPaymentReference) {
+            await couponStore.releaseReservation(reservedPaymentReference).catch((releaseErr) => {
+                console.error('Failed to release coupon reservation after payment intent error:', releaseErr.message);
+            });
+        }
         res.status(500).json({
             error: 'Failed to create payment intent',
             message: error.message
@@ -593,31 +634,47 @@ async function handlePaymentSuccess(attributes) {
         return;
     }
 
-    // Record the affiliate fee owed for this paid conversion, if a valid coupon was used.
-    // Recorded on payment.paid (not at intent creation) so unpaid/abandoned checkouts never
-    // generate a payout obligation. Independent of GHL config so it always tracks payouts.
+    // Confirm the coupon reservation made at checkout creation (see createPaymentIntent)
+    // as paid. This is an UPDATE keyed on payment_reference, not an INSERT, so retried
+    // payment.paid webhooks for the same checkout are idempotent - a second delivery
+    // finds the row already 'paid' and markReservationPaid is a no-op.
     if (metadata.promoCode) {
         try {
-            const coupon = await couponStore.findCoupon(metadata.promoCode);
-            if (coupon) {
-                const redemptionBaseAmount = Number(metadata.baseAmount) || 0;
-                const affiliateFeeAmount = Number((redemptionBaseAmount * coupon.affiliateFeePercent).toFixed(2));
-
-                await couponStore.recordRedemption({
-                    code: coupon.code,
-                    paymentReference: metadata.paymentReference,
-                    productId: metadata.productId,
-                    email: metadata.email,
-                    fullName: metadata.fullName,
-                    baseAmount: redemptionBaseAmount,
-                    discountAmount: Number(metadata.discountAmount) || 0,
-                    affiliateFeeAmount,
-                    affiliateEmail: coupon.affiliateEmail || metadata.referredBy || '',
-                    currency: paymentData.attributes?.currency || 'PHP'
-                });
-                console.log('Coupon redemption recorded:', coupon.code, 'affiliateFee:', affiliateFeeAmount);
+            const confirmed = await couponStore.markReservationPaid({ paymentReference: metadata.paymentReference });
+            if (confirmed) {
+                console.log('Coupon reservation confirmed paid:', confirmed.code, 'affiliateFee:', confirmed.affiliateFeeAmount);
             } else {
-                console.log('Coupon redemption skipped: unknown code in metadata:', metadata.promoCode);
+                const existing = await couponStore.findRedemptionByPaymentReference(metadata.paymentReference);
+                if (existing) {
+                    // Already 'paid' (webhook retry) or 'released' (raced with a failure
+                    // webhook) - nothing to do either way.
+                    console.log('Coupon reservation already resolved:', existing.code, existing.status);
+                } else {
+                    // No reservation found for this payment reference - fall back to
+                    // recording directly as paid (e.g. a row from before reservations
+                    // existed, or a coupon with no maxRedemptions where the reservation
+                    // step was somehow skipped).
+                    const coupon = await couponStore.findCoupon(metadata.promoCode);
+                    if (coupon) {
+                        const redemptionBaseAmount = Number(metadata.baseAmount) || 0;
+                        const affiliateFeeAmount = Number((redemptionBaseAmount * coupon.affiliateFeePercent).toFixed(2));
+                        await couponStore.recordRedemption({
+                            code: coupon.code,
+                            paymentReference: metadata.paymentReference,
+                            productId: metadata.productId,
+                            email: metadata.email,
+                            fullName: metadata.fullName,
+                            baseAmount: redemptionBaseAmount,
+                            discountAmount: Number(metadata.discountAmount) || 0,
+                            affiliateFeeAmount,
+                            affiliateEmail: coupon.affiliateEmail || metadata.referredBy || '',
+                            currency: paymentData.attributes?.currency || 'PHP'
+                        });
+                        console.log('Coupon redemption recorded directly (no prior reservation found):', coupon.code, 'affiliateFee:', affiliateFeeAmount);
+                    } else {
+                        console.log('Coupon redemption skipped: unknown code in metadata:', metadata.promoCode);
+                    }
+                }
             }
         } catch (err) {
             console.log('Coupon redemption recording error (non-fatal):', err.message);
@@ -811,6 +868,14 @@ async function handlePaymentFailure(attributes) {
         await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'failed');
     } else {
         await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'failed');
+    }
+
+    // Release any coupon hold reserved at checkout creation for this payment, so a
+    // failed one-time coupon attempt doesn't block the coupon forever.
+    if (metadata.promoCode && metadata.paymentReference) {
+        await couponStore.releaseReservation(metadata.paymentReference).catch((err) => {
+            console.log('Coupon reservation release error (non-fatal):', err.message);
+        });
     }
 
     // Forward to Clockistry if applicable

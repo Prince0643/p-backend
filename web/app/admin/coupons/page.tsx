@@ -334,6 +334,7 @@ export default function CouponsPage() {
                 <option value="">All statuses</option>
                 <option value="pending">Pending</option>
                 <option value="paid">Paid</option>
+                <option value="released">Released</option>
               </select>
               <button onClick={handleLoadRedemptions} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold">
                 Load

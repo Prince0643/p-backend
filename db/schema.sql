@@ -51,12 +51,27 @@ CREATE TABLE IF NOT EXISTS coupon_redemptions (
     affiliate_fee_amount    NUMERIC(12, 2) NOT NULL DEFAULT 0,
     affiliate_email         TEXT,
     currency                TEXT NOT NULL DEFAULT 'PHP',
-    status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid')),
+    -- 'pending' = reserved at checkout creation, before payment - counts toward
+    -- max_redemptions so a concurrent checkout can't reuse a one-time coupon before
+    -- this one is confirmed. 'paid' = confirmed by a payment.paid webhook. 'released' =
+    -- payment failed/was cancelled, freeing the coupon use back up.
+    status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'released')),
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-    paid_at                 TIMESTAMPTZ
+    paid_at                 TIMESTAMPTZ,
+    released_at             TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_code ON coupon_redemptions(code);
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_status ON coupon_redemptions(status);
+-- payment_reference is generated fresh per checkout, so this should never collide in
+-- practice - it's a defense-in-depth guard against webhook retries or double-submits
+-- inserting a duplicate redemption row for the same checkout.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_coupon_redemptions_payment_reference ON coupon_redemptions(payment_reference);
+
+-- Backward-compatible migration for databases created before pending reservations
+-- existed (the CREATE TABLE above is a no-op once the table already exists).
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
+ALTER TABLE coupon_redemptions DROP CONSTRAINT IF EXISTS coupon_redemptions_status_check;
+ALTER TABLE coupon_redemptions ADD CONSTRAINT coupon_redemptions_status_check CHECK (status IN ('pending', 'paid', 'released'));
 
 CREATE TABLE IF NOT EXISTS affiliates (
     id                      TEXT PRIMARY KEY,

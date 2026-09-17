@@ -17,10 +17,17 @@ function parseSignatureHeader(header) {
 function verifyPaymongoWebhookSignature(req, res, next) {
     const secret = process.env.PAYMONGO_WEBHOOK_SECRET;
 
-    // Fail-open with a loud warning until the secret is configured, so this doesn't
-    // break webhook delivery for deployments that haven't set it up yet. Once set,
-    // verification is enforced (fail-closed).
     if (!secret) {
+        // In production, an unconfigured secret must not silently allow unsigned
+        // webhook processing - that's exactly the hole this middleware exists to close.
+        // Fail closed instead of forwarding the request.
+        if (process.env.NODE_ENV === 'production') {
+            console.error('PAYMONGO_WEBHOOK_SECRET is not configured in production — rejecting webhook request.');
+            return res.status(500).json({ error: 'Webhook verification is not configured' });
+        }
+
+        // Outside production (dev/test), fail-open with a loud warning so local work
+        // isn't blocked by a secret that hasn't been set up yet.
         console.warn('PAYMONGO_WEBHOOK_SECRET is not configured — webhook signature is NOT being verified.');
         return next();
     }

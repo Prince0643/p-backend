@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
+import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
 import { useApiKey } from "@/lib/useApiKey";
@@ -54,7 +55,7 @@ function toLocalDatetimeValue(iso: string | null) {
 }
 
 export default function CouponsPage() {
-  const { ready, ensureApiKey, promptForNewKey } = useApiKey();
+  const { ready, apiKey, ensureApiKey, promptForNewKey, keyModalOpen, closeKeyModal, saveApiKey } = useApiKey();
   const { message, toast } = useToast();
 
   const [coupons, setCoupons] = useState<Coupon[]>([]);
@@ -217,6 +218,7 @@ export default function CouponsPage() {
         onSetKey={promptForNewKey}
         onRefresh={handleRefresh}
       />
+      <ApiKeyModal open={keyModalOpen} currentKey={apiKey} onSave={saveApiKey} onClose={closeKeyModal} />
       <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 py-5 lg:grid-cols-[1fr_1.2fr]">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">

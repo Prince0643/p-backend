@@ -1,4 +1,16 @@
 {
   "version": 1,
-  "coupons": []
+  "coupons": [
+    {
+      "code": "FATHERSDAY15",
+      "discountPercent": 0.15,
+      "affiliateFeePercent": 0,
+      "affiliateEmail": "",
+      "active": true,
+      "expiresAt": null,
+      "productIds": [],
+      "maxRedemptions": null,
+      "notes": "Site-wide Father's Day promo from the Sep 15, 2026 planning meeting. No affiliate fee (not tied to an affiliate) - use FATHERSDAY15 at checkout for 15% off any product."
+    }
+  ]
 }

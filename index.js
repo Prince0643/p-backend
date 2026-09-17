@@ -82,6 +82,11 @@ app.get('/admin/solutions', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'admin', 'solutions', 'index.html'));
 });
 
+// Public affiliate self-registration page
+app.get('/register', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'register', 'index.html'));
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.status(200).json({

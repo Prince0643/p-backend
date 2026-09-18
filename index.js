@@ -84,7 +84,7 @@ app.get('/health', (req, res) => {
 });
 
 if (hasExportedWebApp) {
-    app.use(express.static(webOutDir));
+    app.use(express.static(webOutDir, { redirect: false }));
     const exportedRoutes = [
         '/',
         '/register',
@@ -98,8 +98,13 @@ if (hasExportedWebApp) {
         '/affiliate/dashboard'
     ];
     app.get(exportedRoutes, (req, res) => {
-        const routePath = req.path === '/' ? 'index.html' : path.join(req.path.slice(1), 'index.html');
-        res.sendFile(path.join(webOutDir, routePath));
+        const route = req.path === '/' ? 'index' : req.path.slice(1);
+        const candidates = route === 'index'
+            ? ['index.html']
+            : [`${route}.html`, path.join(route, 'index.html')];
+        const match = candidates.find((candidate) => fs.existsSync(path.join(webOutDir, candidate)));
+        if (!match) return res.status(404).json({ error: 'Page not found' });
+        return res.sendFile(path.join(webOutDir, match));
     });
 } else {
     // Admin UI entry (served from /public)

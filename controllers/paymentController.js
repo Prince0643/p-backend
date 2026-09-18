@@ -7,17 +7,26 @@ const { generateId, validateEmail, validateMobile, calculateTaxedAmount } = requ
 const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 const { findProduct } = require('../utils/productCatalog');
 const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleStore');
+const couponStore = require('../utils/couponStore');
+const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 
-function resolveCatalogProduct({ productId, productName }) {
-    const byId = productId ? findProduct({ productId }) : null;
+async function resolveCatalogProduct({ productId, productName }) {
+    const byId = productId ? await findProduct({ productId }) : null;
     if (byId) return byId;
-    const byName = productName ? findProduct({ productName }) : null;
+    const byName = productName ? await findProduct({ productName }) : null;
     if (byName) return byName;
     return null;
 }
 
 // Create payment intent
 exports.createPaymentIntent = async (req, res) => {
+    // Set once a coupon reservation is actually committed (finalizeCouponReservation
+    // succeeds), so the catch block below knows to release it if anything after that
+    // point fails - otherwise a one-time coupon would stay reserved forever for a
+    // checkout that never actually got created. Declared outside the try block so
+    // catch can see it.
+    let reservedPaymentReference = null;
+
     try {
         // ✅ FIXED: Added paymentMethod and source to destructuring
         const {
@@ -65,7 +74,7 @@ exports.createPaymentIntent = async (req, res) => {
         }
 
         // Product lookup (catalog-backed)
-        const catalogProduct = resolveCatalogProduct({ productId, productName: normalizedProduct });
+        const catalogProduct = await resolveCatalogProduct({ productId, productName: normalizedProduct });
         if (!catalogProduct) {
             return res.status(400).json({ error: 'Invalid product. Add it in /admin/products first.' });
         }
@@ -78,44 +87,73 @@ exports.createPaymentIntent = async (req, res) => {
         const defaultTaxRate = Number(process.env.TAX_RATE ?? 0.10);
         const coreTaxRate = Number(process.env.NX_CORE_TAX_RATE ?? 0.12);
         const taxRate = (source === 'nexistry_core_ph') ? coreTaxRate : defaultTaxRate;
-        
-        // ✅ FIXED: Use frontend amount if provided and valid, otherwise calculate from product
-        let finalAmount, baseAmount, taxAmount;
-        
-        if (amount && amount > 0 && amount !== productInfo.amount) {
-            // Frontend provided a discounted amount - use it
-            finalAmount = Number(Number(amount).toFixed(2));
-            // Calculate base and tax from the discounted total
-            // finalAmount = base + tax, and tax = base * taxRate
-            // So: finalAmount = base + (base * taxRate) = base * (1 + taxRate)
-            // Therefore: base = finalAmount / (1 + taxRate)
-            baseAmount = Number((finalAmount / (1 + taxRate)).toFixed(2));
-            taxAmount = Number((finalAmount - baseAmount).toFixed(2));
-            console.log('Using frontend amount with discount:', {
-                frontendAmount: amount,
-                finalAmount,
-                baseAmount,
-                taxAmount,
-                discountAmount: discountAmount || 0,
-                promoCode: promoCode || 'none'
+
+        // Pricing is always computed server-side from the catalog price + tax rate.
+        // A discount is only applied when a valid, active, non-expired promo code is
+        // supplied — the client-sent `amount`/`discountAmount` are never trusted for
+        // pricing, only echoed back for display/logging. This closes the hole where a
+        // client could set any `amount` up to the catalog max without a real coupon.
+        //
+        // For a coupon with maxRedemptions set, the slot is reserved (as a 'pending'
+        // coupon_redemptions row) right here at checkout creation - not only recorded
+        // after payment.paid fires - so a second concurrent checkout with the same
+        // one-time coupon can't also pass validation before the first one pays.
+        // beginCouponReservation locks the coupon row and holds that lock (via an open
+        // transaction) until finalizeCouponReservation commits the pending row below.
+        let appliedCoupon = null;
+        let couponReservationClient = null;
+        const normalizedPromoCode = promoCode ? String(promoCode).trim() : '';
+
+        if (normalizedPromoCode) {
+            const reservation = await couponStore.beginCouponReservation({
+                code: normalizedPromoCode,
+                productId: catalogProduct.id
             });
-        } else {
-            // Use product mapping (no discount)
-            const taxed = calculateTaxedAmount(productInfo.amount, taxRate);
-            finalAmount = Number(taxed.totalAmount.toFixed(2));
-            baseAmount = Number(taxed.baseAmount.toFixed(2));
-            taxAmount = Number(taxed.taxAmount.toFixed(2));
+            if (!reservation.coupon) {
+                return res.status(400).json({ error: reservation.error || 'Invalid promo code' });
+            }
+            appliedCoupon = reservation.coupon;
+            couponReservationClient = reservation.client;
         }
 
-        // Safety: prevent accidental overcharge beyond catalog price (+ tax)
-        const maxAllowed = Number(calculateTaxedAmount(productInfo.amount, taxRate).totalAmount.toFixed(2));
-        if (finalAmount > maxAllowed) {
-            return res.status(400).json({
-                error: 'Amount exceeds product catalog maximum',
-                maxAllowed,
-                requested: finalAmount
+        const serverDiscountAmount = appliedCoupon
+            ? Number((productInfo.amount * appliedCoupon.discountPercent).toFixed(2))
+            : 0;
+        const discountedBaseCatalogAmount = Number((productInfo.amount - serverDiscountAmount).toFixed(2));
+
+        const taxed = calculateTaxedAmount(discountedBaseCatalogAmount, taxRate);
+        const finalAmount = Number(taxed.totalAmount.toFixed(2));
+        const baseAmount = Number(taxed.baseAmount.toFixed(2));
+        const taxAmount = Number(taxed.taxAmount.toFixed(2));
+
+        if (appliedCoupon && couponReservationClient) {
+            const affiliateFeeAmount = Number((baseAmount * appliedCoupon.affiliateFeePercent).toFixed(2));
+            await couponStore.finalizeCouponReservation(couponReservationClient, {
+                code: appliedCoupon.code,
+                paymentReference,
+                productId: catalogProduct.id,
+                email,
+                fullName,
+                baseAmount,
+                discountAmount: serverDiscountAmount,
+                affiliateFeeAmount,
+                affiliateEmail: appliedCoupon.affiliateEmail || referredBy || '',
+                currency: productInfo.currency
             });
+            // finalizeCouponReservation already committed + released the client above.
+            // Track the reference so the catch block can release the hold if anything
+            // after this point (PayMongo call, etc.) fails.
+            reservedPaymentReference = paymentReference;
         }
+
+        console.log('Computed server-side pricing:', {
+            catalogAmount: productInfo.amount,
+            promoCode: appliedCoupon?.code || 'none',
+            serverDiscountAmount,
+            baseAmount,
+            taxAmount,
+            finalAmount
+        });
 
         // Log what we received for debugging
         console.log('Received payment request:', {
@@ -126,8 +164,8 @@ exports.createPaymentIntent = async (req, res) => {
             paymentMethod,
             source,
             frontendAmount: amount,
-            discountAmount,
-            promoCode
+            frontendDiscountAmount: discountAmount,
+            promoCode: normalizedPromoCode
         });
 
         // FIXED: Flatten metadata - include paymentMethod and source
@@ -145,9 +183,9 @@ exports.createPaymentIntent = async (req, res) => {
             taxAmount: String(taxAmount),
             totalAmount: String(finalAmount),
 
-            // ADD: Discount information
-            discountAmount: String(discountAmount || 0),
-            promoCode: String(promoCode || ''),
+            // ADD: Discount information (server-computed, not client-trusted)
+            discountAmount: String(serverDiscountAmount || 0),
+            promoCode: String(appliedCoupon?.code || ''),
 
             // ADD: Referral information
             referredBy: String(referredBy || ''),
@@ -226,7 +264,7 @@ exports.createPaymentIntent = async (req, res) => {
         const paymentIntent = await paymongoService.createPaymentIntent({
             amount: finalAmount,
             currency: productInfo.currency,
-            description: `${normalizedProduct} - ${fullName}${discountAmount > 0 ? ` (Promo: ${promoCode})` : ''}`,
+            description: `${normalizedProduct} - ${fullName}${appliedCoupon ? ` (Promo: ${appliedCoupon.code})` : ''}`,
             paymentMethodAllowed: paymentIntentAllowed,
             paymentMethodTypes: checkoutMethodTypes,
             metadata: flattenedMetadata,
@@ -236,6 +274,20 @@ exports.createPaymentIntent = async (req, res) => {
         });
 
         console.log('Payment intent created:', paymentIntent.id);
+
+        await digitalSolutionsStore.recordTransaction({
+            type: 'academy_product',
+            transactionId: paymentReference,
+            customerEmail: email,
+            customerName: fullName,
+            productId: catalogProduct.id,
+            productName: normalizedProduct,
+            amount: finalAmount,
+            currency: productInfo.currency,
+            promoCode: appliedCoupon?.code,
+            source,
+            status: 'initiated'
+        });
 
         // Send to LeadConnector webhook - include paymentMethod and source
         await webhookService.sendToLeadConnector({
@@ -249,8 +301,8 @@ exports.createPaymentIntent = async (req, res) => {
             baseAmount: baseAmount,
             taxRate: taxRate,
             taxAmount: taxAmount,
-            discountAmount: discountAmount || 0,
-            promoCode: promoCode || '',
+            discountAmount: serverDiscountAmount,
+            promoCode: appliedCoupon?.code || '',
             notes,
             businessName,
             setupType,
@@ -278,13 +330,18 @@ exports.createPaymentIntent = async (req, res) => {
             baseAmount: baseAmount,
             taxRate: taxRate,
             taxAmount: taxAmount,
-            discountAmount: discountAmount || 0,
-            promoCode: promoCode || '',
+            discountAmount: serverDiscountAmount,
+            promoCode: appliedCoupon?.code || '',
             currency: productInfo.currency
         });
 
     } catch (error) {
         console.error('Payment intent creation error:', error);
+        if (reservedPaymentReference) {
+            await couponStore.releaseReservation(reservedPaymentReference).catch((releaseErr) => {
+                console.error('Failed to release coupon reservation after payment intent error:', releaseErr.message);
+            });
+        }
         res.status(500).json({
             error: 'Failed to create payment intent',
             message: error.message
@@ -555,6 +612,12 @@ async function handlePaymentSuccess(attributes) {
     // Check if this is a Clockistry payment - skip GHL for Clockistry
     const isClockistry = metadata.source === 'clockistry';
 
+    if (isClockistry) {
+        await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'paid');
+    } else {
+        await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'paid');
+    }
+
     // Forward to Clockistry if applicable
     if (isClockistry) {
         try {
@@ -571,6 +634,53 @@ async function handlePaymentSuccess(attributes) {
         return;
     }
 
+    // Confirm the coupon reservation made at checkout creation (see createPaymentIntent)
+    // as paid. This is an UPDATE keyed on payment_reference, not an INSERT, so retried
+    // payment.paid webhooks for the same checkout are idempotent - a second delivery
+    // finds the row already 'paid' and markReservationPaid is a no-op.
+    if (metadata.promoCode) {
+        try {
+            const confirmed = await couponStore.markReservationPaid({ paymentReference: metadata.paymentReference });
+            if (confirmed) {
+                console.log('Coupon reservation confirmed paid:', confirmed.code, 'affiliateFee:', confirmed.affiliateFeeAmount);
+            } else {
+                const existing = await couponStore.findRedemptionByPaymentReference(metadata.paymentReference);
+                if (existing) {
+                    // Already 'paid' (webhook retry) or 'released' (raced with a failure
+                    // webhook) - nothing to do either way.
+                    console.log('Coupon reservation already resolved:', existing.code, existing.status);
+                } else {
+                    // No reservation found for this payment reference - fall back to
+                    // recording directly as paid (e.g. a row from before reservations
+                    // existed, or a coupon with no maxRedemptions where the reservation
+                    // step was somehow skipped).
+                    const coupon = await couponStore.findCoupon(metadata.promoCode);
+                    if (coupon) {
+                        const redemptionBaseAmount = Number(metadata.baseAmount) || 0;
+                        const affiliateFeeAmount = Number((redemptionBaseAmount * coupon.affiliateFeePercent).toFixed(2));
+                        await couponStore.recordRedemption({
+                            code: coupon.code,
+                            paymentReference: metadata.paymentReference,
+                            productId: metadata.productId,
+                            email: metadata.email,
+                            fullName: metadata.fullName,
+                            baseAmount: redemptionBaseAmount,
+                            discountAmount: Number(metadata.discountAmount) || 0,
+                            affiliateFeeAmount,
+                            affiliateEmail: coupon.affiliateEmail || metadata.referredBy || '',
+                            currency: paymentData.attributes?.currency || 'PHP'
+                        });
+                        console.log('Coupon redemption recorded directly (no prior reservation found):', coupon.code, 'affiliateFee:', affiliateFeeAmount);
+                    } else {
+                        console.log('Coupon redemption skipped: unknown code in metadata:', metadata.promoCode);
+                    }
+                }
+            }
+        } catch (err) {
+            console.log('Coupon redemption recording error (non-fatal):', err.message);
+        }
+    }
+
     try {
         if (process.env.GHL_PRIVATE_KEY && process.env.GHL_LOCATION_ID) {
             const amountCentavos = Number(paymentData.attributes?.amount);
@@ -583,7 +693,7 @@ async function handlePaymentSuccess(attributes) {
             const phone = metadata.mobile;
             const product = metadata.product;
             const productId = metadata.productId;
-            const catalogProduct = resolveCatalogProduct({ productId, productName: product });
+            const catalogProduct = await resolveCatalogProduct({ productId, productName: product });
 
             const upsertResult = await ghlService.upsertContact({
                 fullName,
@@ -658,7 +768,7 @@ async function handlePaymentSuccess(attributes) {
                 try {
                     const isRecurring = String(catalogProduct?.billing?.type || 'one_time') === 'recurring';
                     if (isRecurring && contactId && catalogProduct?.id) {
-                        const existingScheduleId = getScheduleId({
+                        const existingScheduleId = await getScheduleId({
                             locationId: process.env.GHL_LOCATION_ID,
                             contactId,
                             productId: catalogProduct.id
@@ -706,7 +816,7 @@ async function handlePaymentSuccess(attributes) {
 
                             const scheduleId = schedule?._id || schedule?.id || schedule?.schedule?._id || schedule?.schedule?.id;
                             if (scheduleId) {
-                                setScheduleId({
+                                await setScheduleId({
                                     locationId: process.env.GHL_LOCATION_ID,
                                     contactId,
                                     productId: catalogProduct.id,
@@ -753,6 +863,20 @@ async function handlePaymentFailure(attributes) {
 
     // Check if this is a Clockistry payment
     const isClockistry = metadata.source === 'clockistry';
+
+    if (isClockistry) {
+        await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'failed');
+    } else {
+        await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'failed');
+    }
+
+    // Release any coupon hold reserved at checkout creation for this payment, so a
+    // failed one-time coupon attempt doesn't block the coupon forever.
+    if (metadata.promoCode && metadata.paymentReference) {
+        await couponStore.releaseReservation(metadata.paymentReference).catch((err) => {
+            console.log('Coupon reservation release error (non-fatal):', err.message);
+        });
+    }
 
     // Forward to Clockistry if applicable
     if (isClockistry) {

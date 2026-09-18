@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nexistry Affiliate Registration</title>
+  <meta name="description" content="Register as a Nexistry Digital Solutions affiliate." />
+  <link rel="stylesheet" href="/public/register/styles.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div class="hero__brand">Nexistry Digital Solutions</div>
+      <h1>Become an Affiliate</h1>
+      <p class="hero__subtitle">Share Nexistry with your network. Your customers get 15% off, you earn 10% commission on every sale — paid out weekly.</p>
+    </header>
+
+    <form id="registrationForm" class="card" novalidate>
+      <div id="formStatus" class="status hidden" role="alert"></div>
+
+      <section class="section">
+        <h2 class="section__title">Personal Information</h2>
+        <div class="grid">
+          <label class="field">
+            <span class="field__label">First Name <span class="required">*</span></span>
+            <input id="firstName" name="firstName" type="text" autocomplete="given-name" required />
+          </label>
+          <label class="field">
+            <span class="field__label">Last Name <span class="required">*</span></span>
+            <input id="lastName" name="lastName" type="text" autocomplete="family-name" required />
+          </label>
+          <label class="field">
+            <span class="field__label">Email Address <span class="required">*</span></span>
+            <input id="email" name="email" type="email" autocomplete="email" required />
+          </label>
+          <label class="field">
+            <span class="field__label">Contact Number <span class="required">*</span></span>
+            <input id="contactNumber" name="contactNumber" type="tel" autocomplete="tel" required placeholder="+63 9XX XXX XXXX" />
+            <span class="field__hint">Include your country code, e.g. +63 for the Philippines.</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2 class="section__title">Social Media <span class="section__optional">(optional)</span></h2>
+        <div class="grid">
+          <label class="field">
+            <span class="field__label">Facebook</span>
+            <input id="facebook" name="facebook" type="text" placeholder="Profile URL or username" />
+          </label>
+          <label class="field">
+            <span class="field__label">Instagram</span>
+            <input id="instagram" name="instagram" type="text" placeholder="Profile URL or @username" />
+          </label>
+          <label class="field">
+            <span class="field__label">TikTok</span>
+            <input id="tiktok" name="tiktok" type="text" placeholder="Profile URL or @username" />
+          </label>
+          <label class="field">
+            <span class="field__label">YouTube</span>
+            <input id="youtube" name="youtube" type="text" placeholder="Channel URL or name" />
+          </label>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2 class="section__title">Payout Details</h2>
+        <fieldset class="choice-group">
+          <legend class="field__label">Payment Region <span class="required">*</span></legend>
+          <div class="choice-grid">
+            <label class="choice">
+              <input type="radio" name="paymentRegion" value="PH" required />
+              <span><strong>Philippines</strong><br /><span class="field__hint">GCash, Maya, or local bank</span></span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="paymentRegion" value="GLOBAL" required />
+              <span><strong>Global</strong><br /><span class="field__hint">Wise or PayPal</span></span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="region-panel" id="phPanel" hidden>
+          <label class="field">
+            <span class="field__label">Payment Method <span class="required">*</span></span>
+            <select id="phMethod" class="field__select">
+              <option value="">Select a payment method</option>
+              <option value="GCASH">GCash</option>
+              <option value="MAYA">Maya</option>
+              <option value="BDO">Banco de Oro (BDO)</option>
+              <option value="BPI">Bank of the Philippine Islands (BPI)</option>
+              <option value="METROBANK">Metrobank</option>
+              <option value="LANDBANK">Land Bank of the Philippines</option>
+              <option value="PNB">Philippine National Bank (PNB)</option>
+              <option value="UNIONBANK">UnionBank</option>
+              <option value="SECURITY_BANK">Security Bank</option>
+              <option value="RCBC">RCBC</option>
+              <option value="OTHER">Other Bank</option>
+            </select>
+          </label>
+
+          <div id="ewalletFields" class="grid" hidden>
+            <label class="field">
+              <span class="field__label">Account-holder Name <span class="required">*</span></span>
+              <input id="ewalletName" name="ewalletName" type="text" />
+            </label>
+            <label class="field">
+              <span class="field__label">Registered Mobile Number <span class="required">*</span></span>
+              <input id="ewalletNumber" name="ewalletNumber" type="tel" />
+            </label>
+          </div>
+
+          <div id="bankFields" class="grid" hidden>
+            <label class="field field--wide" id="otherBankGroup" hidden>
+              <span class="field__label">Bank Name <span class="required">*</span></span>
+              <input id="otherBankName" name="otherBankName" type="text" />
+            </label>
+            <label class="field">
+              <span class="field__label">Account Name <span class="required">*</span></span>
+              <input id="bankAccountName" name="bankAccountName" type="text" />
+            </label>
+            <label class="field">
+              <span class="field__label">Account Number <span class="required">*</span></span>
+              <input id="bankAccountNumber" name="bankAccountNumber" type="text" inputmode="numeric" />
+            </label>
+            <label class="field">
+              <span class="field__label">Bank Branch <span class="required">*</span></span>
+              <input id="bankBranch" name="bankBranch" type="text" />
+            </label>
+          </div>
+        </div>
+
+        <div class="region-panel" id="globalPanel" hidden>
+          <label class="field">
+            <span class="field__label">Payment Method <span class="required">*</span></span>
+            <select id="globalMethod" class="field__select">
+              <option value="">Select a payment method</option>
+              <option value="WISE">Wise</option>
+              <option value="PAYPAL">PayPal</option>
+            </select>
+          </label>
+          <div class="grid">
+            <label class="field">
+              <span class="field__label">Account-holder Name <span class="required">*</span></span>
+              <input id="globalAccountName" name="globalAccountName" type="text" />
+            </label>
+            <label class="field">
+              <span class="field__label">Account Email <span class="required">*</span></span>
+              <input id="globalAccountEmail" name="globalAccountEmail" type="email" />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <label class="agreement">
+        <input id="termsAgreement" type="checkbox" required />
+        <span>I agree to the <button type="button" class="link-button" id="openTerms">Terms and Conditions</button>, including the 15% customer discount / 10% commission structure and weekly Saturday payouts. <span class="required">*</span></span>
+      </label>
+
+      <button type="submit" id="submitButton" class="submit-button">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="buttonText">Complete Registration</span>
+      </button>
+    </form>
+
+    <div id="successCard" class="card success-card hidden">
+      <div class="success-icon">✓</div>
+      <h2>You're registered!</h2>
+      <p>Share this code with your customers — it gives them 15% off and earns you 10% commission. It works once, for one customer.</p>
+      <div class="coupon-display">
+        <span id="couponCodeText"></span>
+        <button type="button" id="copyCouponBtn" class="btn btn--ghost">Copy</button>
+      </div>
+      <p class="success-note">Payouts are processed weekly on Saturdays. Questions? Contact <a href="mailto:billing@nexistrydigitalsolutions.com">billing@nexistrydigitalsolutions.com</a>.</p>
+    </div>
+
+    <footer class="footer">
+      <p>Questions? <a href="mailto:support.creators@nexistrydigitalsolutions.com">support.creators@nexistrydigitalsolutions.com</a></p>
+      <p class="copyright">© <span id="year"></span> Nexistry Digital Solutions</p>
+    </footer>
+  </main>
+
+  <dialog id="termsDialog">
+    <div class="dialog-inner">
+      <div class="dialog-header">
+        <h2>Terms and Conditions</h2>
+        <button type="button" id="closeTerms" class="close-button" aria-label="Close">×</button>
+      </div>
+      <div class="dialog-copy">
+        <h3>1. Commission Structure</h3>
+        <p>Affiliates receive a 10% commission on qualifying purchases. Customers who use your assigned discount code receive a 15% discount. Your code is one-time-use, tied to your account.</p>
+        <h3>2. Payment Policy</h3>
+        <p>Payouts are processed weekly, on Saturdays, through your selected payment method. Global payouts may vary in timing and fees by provider.</p>
+        <h3>3. Accuracy of Payment Information</h3>
+        <p>You are responsible for providing accurate payout details. Nexistry Digital Solutions is not responsible for delays or rejected transfers due to incorrect account information.</p>
+        <h3>4. Code of Conduct</h3>
+        <p>Affiliates must act professionally and follow applicable laws. Fraudulent referrals or misuse of tracking may result in termination.</p>
+        <h3>5. No Registration Fees</h3>
+        <p>No upfront fee is required to join. Commissions are earned only from legitimate qualifying purchases.</p>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="/public/register/app.js"></script>
+</body>
+</html>

@@ -384,6 +384,14 @@ To integrate your system with this backend, the following configurations must be
 
 ### Required Environment Variables
 
+#### Database (Required)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string, e.g. `postgres://user:password@host:5432/dbname`. All product, coupon, affiliate, and digital-solutions data lives in Postgres now (see `db/schema.sql`) — the old `data/*.json` files are only used as a one-time seed source by `db/migrate.js`. |
+
+Run `npm run migrate` (i.e. `node db/migrate.js`) once against a fresh database to create the schema (`db/schema.sql`) and import any existing `data/*.json` content. Safe to re-run — inserts are `ON CONFLICT DO NOTHING`/idempotent.
+
 #### PayMongo Configuration
 
 | Variable | Required | Description |
@@ -427,6 +435,14 @@ Notes:
 | `LEADCONNECTOR_WEBHOOK` | No | LeadConnector webhook URL for payment notifications |
 | `DISABLE_LEADCONNECTOR_WEBHOOK` | No | Set to `true` to disable LeadConnector webhooks |
 
+#### PayMongo Webhook Signature Verification (Strongly recommended)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PAYMONGO_WEBHOOK_SECRET` | No (but see below) | Signing secret shown when the webhook is created in the PayMongo dashboard/API. Verifies the `Paymongo-Signature` header on incoming `/api/payments/webhook` requests. |
+
+Until this is set, `/api/payments/webhook` accepts any request body with no authentication — anyone who finds the URL can POST fake `payment.paid` events and trigger GHL invoice creation/affiliate payouts. Set this in every environment as soon as the webhook is created in PayMongo.
+
 #### Server Configuration
 
 | Variable | Required | Description |
@@ -440,6 +456,9 @@ Notes:
 # Server
 NODE_ENV=production
 PORT=3000
+
+# Database (required)
+DATABASE_URL=postgres://user:password@host:5432/dbname
 
 # CORS - Add your system's origin here
 ALLOWED_ORIGINS=https://yoursystem.com,https://app.yoursystem.com
@@ -460,6 +479,9 @@ GHL_BUSINESS_NAME=Your Business Name
 
 # LeadConnector Webhook (optional)
 LEADCONNECTOR_WEBHOOK=https://services.leadconnectorhq.com/hooks/your-webhook-id
+
+# PayMongo webhook signature verification (strongly recommended)
+PAYMONGO_WEBHOOK_SECRET=whsk_xxxxxxxxxxxxxxxx
 ```
 
 ---

@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const adminProductsController = require('../controllers/adminProductsController');
-const { validateAdminApiKey } = require('../middleware/auth');
+const { requireAdminAuth } = require('../middleware/adminAuth');
 
-router.use(validateAdminApiKey);
+router.use(requireAdminAuth);
 
 router.get('/products', adminProductsController.list);
 router.get('/products/:id', adminProductsController.getOne);

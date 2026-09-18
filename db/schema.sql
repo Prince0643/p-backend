@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS coupon_products (
     product_id              TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     PRIMARY KEY (coupon_code, product_id)
 );
+CREATE INDEX IF NOT EXISTS idx_coupon_products_product_id ON coupon_products(product_id);
 
 CREATE TABLE IF NOT EXISTS coupon_redemptions (
     id                      TEXT PRIMARY KEY,
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS coupon_redemptions (
     released_at             TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_code ON coupon_redemptions(code);
+CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_product_id ON coupon_redemptions(product_id);
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_status ON coupon_redemptions(status);
 -- payment_reference is generated fresh per checkout, so this should never collide in
 -- practice - it's a defense-in-depth guard against webhook retries or double-submits
@@ -95,6 +97,7 @@ CREATE TABLE IF NOT EXISTS affiliates (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS password_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_affiliates_coupon_code ON affiliates(coupon_code);
 
 -- Admin accounts for the console login. The env-configured ADMIN_API_KEY/API_KEY
 -- (see middleware/auth.js) keeps working as a permanent master/bootstrap credential
@@ -132,6 +135,8 @@ CREATE INDEX IF NOT EXISTS idx_dst_type ON digital_solutions_transactions(type);
 CREATE INDEX IF NOT EXISTS idx_dst_status ON digital_solutions_transactions(status);
 CREATE INDEX IF NOT EXISTS idx_dst_company_id ON digital_solutions_transactions(company_id);
 CREATE INDEX IF NOT EXISTS idx_dst_customer_email ON digital_solutions_transactions(customer_email);
+CREATE INDEX IF NOT EXISTS idx_dst_product_id ON digital_solutions_transactions(product_id);
+CREATE INDEX IF NOT EXISTS idx_dst_promo_code ON digital_solutions_transactions(promo_code);
 
 CREATE TABLE IF NOT EXISTS ghl_invoice_schedules (
     location_id             TEXT NOT NULL,

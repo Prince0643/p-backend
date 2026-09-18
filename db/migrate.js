@@ -28,7 +28,19 @@ async function importProducts(client) {
         await client.query(
             `INSERT INTO products (id, name, amount_php, currency, billing_type, billing_interval, default_payment_method, default_source, default_tax_rate, display_suffix, success_url, cancel_url)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-             ON CONFLICT (id) DO NOTHING`,
+             ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                amount_php = EXCLUDED.amount_php,
+                currency = EXCLUDED.currency,
+                billing_type = EXCLUDED.billing_type,
+                billing_interval = EXCLUDED.billing_interval,
+                default_payment_method = EXCLUDED.default_payment_method,
+                default_source = EXCLUDED.default_source,
+                default_tax_rate = EXCLUDED.default_tax_rate,
+                display_suffix = EXCLUDED.display_suffix,
+                success_url = EXCLUDED.success_url,
+                cancel_url = EXCLUDED.cancel_url,
+                updated_at = now()`,
             [
                 p.id, p.name, p.amountPhp, p.currency || 'PHP',
                 p.billing?.type || 'one_time', p.billing?.interval || null,

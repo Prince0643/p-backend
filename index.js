@@ -5,6 +5,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fs = require('fs');
 
 const paymentRoutes = require('./routes/payments');
 const clockistryRoutes = require('./routes/clockistry');
@@ -56,6 +57,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Static files (if needed)
 app.use('/public', express.static(path.join(__dirname, 'public')));
+const webOutDir = path.join(__dirname, 'web', 'out');
+const hasExportedWebApp = fs.existsSync(path.join(webOutDir, 'index.html'));
 
 // Routes
 app.use('/api/payments', paymentRoutes);
@@ -71,28 +74,6 @@ app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/admin', adminAffiliateRoutes);
 app.use('/api/admin', adminSolutionsRoutes);
 
-// Admin UI entry (served from /public)
-app.get('/admin/products', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'admin', 'products', 'index.html'));
-});
-
-app.get('/admin/coupons', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'admin', 'coupons', 'index.html'));
-});
-
-app.get('/admin/affiliates', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'admin', 'affiliates', 'index.html'));
-});
-
-app.get('/admin/solutions', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'admin', 'solutions', 'index.html'));
-});
-
-// Public affiliate self-registration page
-app.get('/register', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'register', 'index.html'));
-});
-
 // Health check endpoint
 app.get('/health', (req, res) => {
     res.status(200).json({
@@ -102,21 +83,63 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-    res.json({
-        name: 'Nexistry Academy PayMongo API',
-        version: '1.0.0',
-        endpoints: {
-            createPayment: '/api/payments/create-payment-intent',
-            paymentWebhook: '/api/payments/webhook',
-            checkStatus: '/api/payments/status/:id',
-            paymongoCapabilities: '/api/payments/capabilities',
-            clockistryPayment: '/api/clockistry/create-payment-intent',
-            health: '/health'
-        }
+if (hasExportedWebApp) {
+    app.use(express.static(webOutDir));
+    const exportedRoutes = [
+        '/',
+        '/register',
+        '/admin/login',
+        '/admin/admins',
+        '/admin/products',
+        '/admin/coupons',
+        '/admin/affiliates',
+        '/admin/solutions',
+        '/affiliate/login',
+        '/affiliate/dashboard'
+    ];
+    app.get(exportedRoutes, (req, res) => {
+        const routePath = req.path === '/' ? 'index.html' : path.join(req.path.slice(1), 'index.html');
+        res.sendFile(path.join(webOutDir, routePath));
     });
-});
+} else {
+    // Admin UI entry (served from /public)
+    app.get('/admin/products', (req, res) => {
+        res.sendFile(path.join(__dirname, 'public', 'admin', 'products', 'index.html'));
+    });
+
+    app.get('/admin/coupons', (req, res) => {
+        res.sendFile(path.join(__dirname, 'public', 'admin', 'coupons', 'index.html'));
+    });
+
+    app.get('/admin/affiliates', (req, res) => {
+        res.sendFile(path.join(__dirname, 'public', 'admin', 'affiliates', 'index.html'));
+    });
+
+    app.get('/admin/solutions', (req, res) => {
+        res.sendFile(path.join(__dirname, 'public', 'admin', 'solutions', 'index.html'));
+    });
+
+    // Public affiliate self-registration page
+    app.get('/register', (req, res) => {
+        res.sendFile(path.join(__dirname, 'public', 'register', 'index.html'));
+    });
+
+    // Root endpoint
+    app.get('/', (req, res) => {
+        res.json({
+            name: 'Nexistry Academy PayMongo API',
+            version: '1.0.0',
+            endpoints: {
+                createPayment: '/api/payments/create-payment-intent',
+                paymentWebhook: '/api/payments/webhook',
+                checkStatus: '/api/payments/status/:id',
+                paymongoCapabilities: '/api/payments/capabilities',
+                clockistryPayment: '/api/clockistry/create-payment-intent',
+                health: '/health'
+            }
+        });
+    });
+}
 
 // Error handling middleware
 app.use((err, req, res, next) => {

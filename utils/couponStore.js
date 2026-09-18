@@ -1,6 +1,11 @@
 // utils/couponStore.js
 const pool = require('../db/pool');
 
+// Applies only to brand-new codes (see upsertCoupon) - existing longer codes
+// (e.g. site-wide promos created before this limit existed) keep working so they
+// can still be edited, suspended/reactivated, etc.
+const MAX_NEW_COUPON_CODE_LENGTH = 6;
+
 function toCouponCode(input) {
     return String(input || '')
         .trim()
@@ -93,6 +98,11 @@ async function upsertCoupon(payload) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+        const { rows: existingRows } = await client.query('SELECT 1 FROM coupons WHERE code = $1', [c.code]);
+        const isNewCode = existingRows.length === 0;
+        if (isNewCode && c.code.length > MAX_NEW_COUPON_CODE_LENGTH) {
+            throw new Error(`Coupon code must be at most ${MAX_NEW_COUPON_CODE_LENGTH} characters`);
+        }
         await client.query(
             `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, updated_at)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())

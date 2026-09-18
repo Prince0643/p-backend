@@ -3,15 +3,19 @@ const crypto = require('crypto');
 const pool = require('../db/pool');
 const couponStore = require('../utils/couponStore');
 
-let counter = 0;
-/** Unique-enough per-process code so parallel test files never collide on a coupon code. */
-function testCouponCode(label = 'TEST') {
-    counter += 1;
-    return `${label}_${process.pid}_${counter}_${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
+const COUPON_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+/** 6-char random code (matches the production 6-character coupon code limit). */
+function testCouponCode() {
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+        code += COUPON_CODE_CHARS[Math.floor(Math.random() * COUPON_CODE_CHARS.length)];
+    }
+    return code;
 }
 
 async function createTestCoupon(overrides = {}) {
-    const code = overrides.code || testCouponCode(overrides.label);
+    const code = overrides.code || testCouponCode();
     await couponStore.upsertCoupon({
         discountPercent: 0.15,
         affiliateFeePercent: 0.10,

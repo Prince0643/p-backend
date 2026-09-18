@@ -30,11 +30,17 @@
       "name": "Freelancer Plan",
       "amountPhp": 3500,
       "currency": "PHP",
+      "billing": {
+        "type": "recurring",
+        "interval": "monthly"
+      },
       "defaults": {
         "paymentMethod": "all",
         "source": "nexistry_academy",
         "taxRate": 0.1,
-        "displaySuffix": ""
+        "displaySuffix": "",
+        "successUrl": "https://nxacademy.nexistrydigitalsolutions.com/thank-you",
+        "cancelUrl": "https://nxacademy.nexistrydigitalsolutions.com/"
       }
     },
     {
@@ -162,11 +168,17 @@
       "name": "Premium Plan",
       "amountPhp": 12000,
       "currency": "PHP",
+      "billing": {
+        "type": "recurring",
+        "interval": "monthly"
+      },
       "defaults": {
         "paymentMethod": "all",
         "source": "nexistry_academy",
         "taxRate": 0.1,
-        "displaySuffix": ""
+        "displaySuffix": "",
+        "successUrl": "https://nexistrycoreph.com/product-thank-you",
+        "cancelUrl": "https://nexistrycoreph.com/"
       }
     },
     {
@@ -210,11 +222,16 @@
       "name": "NxAcademy MC Plan 1",
       "amountPhp": 700,
       "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
       "defaults": {
         "paymentMethod": "all",
         "source": "nx_academy_mc_plan1",
         "taxRate": 0.1,
-        "displaySuffix": "/mc-plan1"
+        "displaySuffix": "/mc-plan1",
+        "successUrl": "https://nexistryacademy.com/thank-you",
+        "cancelUrl": "https://startup.nexistryacademy.com"
       }
     },
     {
@@ -222,11 +239,16 @@
       "name": "NxAcademy MC Plan 2",
       "amountPhp": 1500,
       "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
       "defaults": {
         "paymentMethod": "all",
         "source": "nx_academy_mc_plan2",
         "taxRate": 0.1,
-        "displaySuffix": "/mc-plan2"
+        "displaySuffix": "/mc-plan2",
+        "successUrl": "https://nexistryacademy.com/thank-you",
+        "cancelUrl": "https://startup.nexistryacademy.com"
       }
     },
     {
@@ -234,11 +256,16 @@
       "name": "NxAcademy MC Plan 3",
       "amountPhp": 3000,
       "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
       "defaults": {
         "paymentMethod": "all",
         "source": "nx_academy_mc_plan3",
         "taxRate": 0.1,
-        "displaySuffix": "/mc-plan3"
+        "displaySuffix": "/mc-plan3",
+        "successUrl": "https://nexistryacademy.com/thank-you",
+        "cancelUrl": "https://startup.nexistryacademy.com"
       }
     },
     {
@@ -246,11 +273,16 @@
       "name": "Anti Lowball Playbook",
       "amountPhp": 999,
       "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
       "defaults": {
         "paymentMethod": "all",
         "source": "anti_lowball_playbook",
         "taxRate": 0.1,
-        "displaySuffix": "one-time"
+        "displaySuffix": "one-time",
+        "successUrl": "https://nexistryacademy.com/thank-you",
+        "cancelUrl": "https://anti-lowball.nexistryacademy.com/thank-you"
       }
     },
     {
@@ -299,6 +331,114 @@
         "source": "priority_it_support",
         "taxRate": 0,
         "displaySuffix": "/priority-it-support"
+      }
+    },
+    {
+      "id": "nc_qsa_architectural_firm",
+      "name": "NC QSA Architectural Firm",
+      "amountPhp": 3000,
+      "currency": "PHP",
+      "billing": {
+        "type": "recurring",
+        "interval": "monthly"
+      },
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "nc_qsa_architectural_firm",
+        "taxRate": 0.1,
+        "displaySuffix": "/month"
+      }
+    },
+    {
+      "id": "portfolio_service_starter",
+      "name": "Portfolio Service Starter",
+      "amountPhp": 300,
+      "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "portfolio_service_starter",
+        "taxRate": 0.1,
+        "displaySuffix": "/portfolio-service-starter"
+      }
+    },
+    {
+      "id": "portfolio_service_with_automation",
+      "name": "Portfolio Service With Automation",
+      "amountPhp": 1000,
+      "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "portfolio_service_with_automation",
+        "taxRate": 0.1,
+        "displaySuffix": "/portfolio-service-with-automation"
+      }
+    },
+    {
+      "id": "portfolio_service_maintained",
+      "name": "Portfolio Service Maintained",
+      "amountPhp": 1200,
+      "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "portfolio_service_maintained",
+        "taxRate": 0.1,
+        "displaySuffix": "/portfolio-service-maintained"
+      }
+    },
+    {
+      "id": "portfolio_service_premium",
+      "name": "Portfolio Service Premium",
+      "amountPhp": 1500,
+      "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "portfolio_service_premium",
+        "taxRate": 0.1,
+        "displaySuffix": "/portfolio-service-premium"
+      }
+    },
+    {
+      "id": "logo_design",
+      "name": "Logo Design",
+      "amountPhp": 300,
+      "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "logo_design",
+        "taxRate": 0.1,
+        "displaySuffix": "/logo-design"
+      }
+    },
+    {
+      "id": "asgard_website",
+      "name": "Asgard Website",
+      "amountPhp": 12312.4,
+      "currency": "PHP",
+      "billing": {
+        "type": "one_time"
+      },
+      "defaults": {
+        "paymentMethod": "all",
+        "source": "asgard_website",
+        "taxRate": 0,
+        "displaySuffix": "/asgard-website",
+        "successUrl": "https://nexistrydigitalsolutions.com/home",
+        "cancelUrl": "https://nexistrydigitalsolutions.com/asgard-website"
       }
     }
   ]

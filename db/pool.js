@@ -2,6 +2,9 @@
 const { Pool } = require('pg');
 
 if (!process.env.DATABASE_URL) {
+    if (process.env.NODE_ENV === 'production') {
+        throw new Error('DATABASE_URL is required in production');
+    }
     console.warn('DATABASE_URL is not configured - database-backed stores will fail to connect.');
 }
 

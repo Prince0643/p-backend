@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { UnauthorizedError } from "./api";
 
@@ -20,7 +20,19 @@ function readStoredSession(): AffiliateSession | null {
 
 export function useAffiliateAuth() {
   const router = useRouter();
-  const [session, setSessionState] = useState<AffiliateSession | null>(readStoredSession);
+  // Start at null on both server and client so the initial render always matches
+  // (localStorage doesn't exist during SSR/static export) - the real session is
+  // read after mount, in the effect below, which is client-only by definition.
+  const [session, setSessionState] = useState<AffiliateSession | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    // Reads localStorage, which doesn't exist during SSR/static export - must
+    // happen client-side, after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSessionState(readStoredSession());
+    setReady(true);
+  }, []);
 
   const setSession = useCallback((next: AffiliateSession | null) => {
     setSessionState(next);
@@ -56,7 +68,7 @@ export function useAffiliateAuth() {
   );
 
   return {
-    ready: true,
+    ready,
     token: session?.token || null,
     email: session?.email || null,
     isLoggedIn: Boolean(session?.token),

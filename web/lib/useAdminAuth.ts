@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { UnauthorizedError } from "./api";
 
@@ -20,8 +20,19 @@ function readStoredSession(): AdminSession | null {
 
 export function useAdminAuth() {
   const router = useRouter();
-  // Lazy initializer reads localStorage once, synchronously, on first render.
-  const [session, setSessionState] = useState<AdminSession | null>(readStoredSession);
+  // Start at null on both server and client so the initial render always matches
+  // (localStorage doesn't exist during SSR/static export) - the real session is
+  // read after mount, in the effect below, which is client-only by definition.
+  const [session, setSessionState] = useState<AdminSession | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    // Reads localStorage, which doesn't exist during SSR/static export - must
+    // happen client-side, after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSessionState(readStoredSession());
+    setReady(true);
+  }, []);
 
   const setSession = useCallback((next: AdminSession | null) => {
     setSessionState(next);
@@ -59,7 +70,7 @@ export function useAdminAuth() {
   );
 
   return {
-    ready: true,
+    ready,
     token: session?.token || null,
     admin: session?.admin || null,
     isLoggedIn: Boolean(session?.token),

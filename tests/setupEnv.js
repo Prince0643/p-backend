@@ -13,6 +13,7 @@ process.env.DATABASE_URL = process.env.TEST_DATABASE_URL
 // Fixed, known values so tests don't depend on whatever's in the real .env.
 process.env.PAYMONGO_WEBHOOK_SECRET = 'test_webhook_secret_for_automated_tests';
 process.env.ADMIN_API_KEY = 'test_admin_key_for_automated_tests';
+process.env.AUTH_TOKEN_SECRET = 'test_auth_token_secret_for_automated_tests';
 
 module.exports = {
     hasPaymongoKey: Boolean(process.env.PAYMONGO_SECRET_KEY)

@@ -2,10 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
-import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
-import { useApiKey } from "@/lib/useApiKey";
+import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
 
 type Affiliate = {
@@ -79,7 +78,7 @@ function renderPayout(a: Affiliate) {
 }
 
 export default function AffiliatesPage() {
-  const { ready, apiKey, ensureApiKey, promptForNewKey, keyModalOpen, closeKeyModal, saveApiKey } = useApiKey();
+  const { ready, admin, requireAuth, handleAuthError, logout } = useAdminAuth();
   const { message, toast } = useToast();
 
   const [affiliates, setAffiliates] = useState<Affiliate[]>([]);
@@ -106,33 +105,33 @@ export default function AffiliatesPage() {
 
   useEffect(() => {
     if (!ready) return;
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
-    loadAffiliates(key).catch((e) => toast(e.message));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- ensureApiKey/loadAffiliates intentionally not deps to avoid refetch loops
+    loadAffiliates(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/loadAffiliates intentionally not deps to avoid refetch loops
   }, [ready]);
 
   async function selectAffiliate(id: string) {
     setSelectedId(id);
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     try {
       await loadDetail(key, id);
     } catch (e) {
-      toast((e as Error).message);
+      if (!handleAuthError(e)) toast((e as Error).message);
     }
   }
 
   async function handleRefresh() {
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     try {
       await loadAffiliates(key);
       if (selectedId) await loadDetail(key, selectedId);
       toast("Refreshed.");
     } catch (e) {
-      toast((e as Error).message);
+      if (!handleAuthError(e)) toast((e as Error).message);
     }
   }
 
@@ -140,7 +139,7 @@ export default function AffiliatesPage() {
     if (!selectedId) return;
     const verb = statusChoice !== "active" ? "Their coupon will be deactivated." : "Their coupon will be reactivated (if not already used up).";
     if (!confirm(`Set this affiliate's status to "${statusChoice}"? ${verb}`)) return;
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     try {
       await apiFetch(`/api/admin/affiliates/${encodeURIComponent(selectedId)}/status`, key, {
@@ -151,7 +150,7 @@ export default function AffiliatesPage() {
       await loadAffiliates(key);
       await loadDetail(key, selectedId);
     } catch (e) {
-      toast((e as Error).message);
+      if (!handleAuthError(e)) toast((e as Error).message);
     }
   }
 
@@ -166,10 +165,10 @@ export default function AffiliatesPage() {
       <AdminTopbar
         title="Nexistry Backend"
         subtitle="Affiliate Registrations"
-        onSetKey={promptForNewKey}
+        adminEmail={admin?.email}
         onRefresh={handleRefresh}
+        onLogout={logout}
       />
-      <ApiKeyModal open={keyModalOpen} currentKey={apiKey} onSave={saveApiKey} onClose={closeKeyModal} />
       <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 py-5 lg:grid-cols-[1fr_1.2fr]">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">

@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
+import { useAffiliateAuth } from "@/lib/useAffiliateAuth";
 
 const PH_BANKS = [
   { value: "BDO", label: "Banco de Oro (BDO)" },
@@ -24,6 +26,8 @@ function normalizePhPhone(raw: string) {
 }
 
 export default function RegisterPage() {
+  const router = useRouter();
+  const { setSession } = useAffiliateAuth();
   const formRef = useRef<HTMLFormElement>(null);
   const [region, setRegion] = useState<"PH" | "GLOBAL" | "">("");
   const [phMethod, setPhMethod] = useState("");
@@ -55,10 +59,12 @@ export default function RegisterPage() {
 
     setSubmitting(true);
     try {
-      const res = await apiFetch<{ couponCode: string }>("/api/affiliates/register", "", {
-        method: "POST",
-        body: data,
-      });
+      const res = await apiFetch<{ couponCode: string; affiliateId: string; token: string }>(
+        "/api/affiliates/register",
+        "",
+        { method: "POST", body: data }
+      );
+      setSession({ token: res.token, affiliateId: res.affiliateId, email: data.email });
       setResult(res);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "We could not complete your registration. Please try again.");
@@ -112,6 +118,12 @@ export default function RegisterPage() {
               {copied ? "Copied!" : "Copy"}
             </button>
           </div>
+          <button
+            onClick={() => router.push("/affiliate/dashboard")}
+            className="mb-4.5 flex min-h-[48px] w-full items-center justify-center rounded-xl bg-gradient-to-br from-blue-400 to-purple-500 text-[15px] font-extrabold text-slate-950"
+          >
+            Go to My Dashboard
+          </button>
           <p className="text-xs text-slate-400">
             Payouts are processed weekly on Saturdays. Questions? Contact{" "}
             <a href="mailto:billing@nexistrydigitalsolutions.com" className="text-blue-400">
@@ -142,6 +154,16 @@ export default function RegisterPage() {
               </Field>
               <Field label="Email Address" required>
                 <input name="email" type="email" required className="input" autoComplete="email" />
+              </Field>
+              <Field label="Password" required hint="At least 8 characters. This logs you into your affiliate dashboard.">
+                <input
+                  name="password"
+                  type="password"
+                  required
+                  minLength={8}
+                  className="input"
+                  autoComplete="new-password"
+                />
               </Field>
               <Field label="Contact Number" required hint="Include your country code, e.g. +63 for the Philippines.">
                 <input

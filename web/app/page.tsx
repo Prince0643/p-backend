@@ -17,7 +17,13 @@ export default function Home() {
           Affiliate Registration
         </Link>
         <Link
-          href="/admin/products"
+          href="/affiliate/login"
+          className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 font-bold text-slate-100 hover:bg-white/10"
+        >
+          Affiliate Login
+        </Link>
+        <Link
+          href="/admin/login"
           className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 font-bold text-slate-100 hover:bg-white/10"
         >
           Admin Console

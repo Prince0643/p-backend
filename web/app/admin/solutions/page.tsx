@@ -2,10 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
-import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
-import { useApiKey } from "@/lib/useApiKey";
+import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
 
 type Transaction = {
@@ -32,7 +31,7 @@ function pillClasses(status: string) {
 }
 
 export default function SolutionsPage() {
-  const { ready, apiKey, ensureApiKey, promptForNewKey, keyModalOpen, closeKeyModal, saveApiKey } = useApiKey();
+  const { ready, admin, requireAuth, handleAuthError, logout } = useAdminAuth();
   const { message, toast } = useToast();
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -53,21 +52,21 @@ export default function SolutionsPage() {
 
   useEffect(() => {
     if (!ready) return;
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
-    load(key, typeFilter, statusFilter).catch((e) => toast(e.message));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- ensureApiKey/load intentionally not deps to avoid refetch loops
+    load(key, typeFilter, statusFilter).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load intentionally not deps to avoid refetch loops
   }, [ready, typeFilter, statusFilter]);
 
   async function handleRefresh() {
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     try {
       await load(key, typeFilter, statusFilter);
       toast("Refreshed.");
     } catch (e) {
-      toast((e as Error).message);
+      if (!handleAuthError(e)) toast((e as Error).message);
     }
   }
 
@@ -84,10 +83,10 @@ export default function SolutionsPage() {
       <AdminTopbar
         title="Nexistry Backend"
         subtitle="Digital Solutions Tracker"
-        onSetKey={promptForNewKey}
+        adminEmail={admin?.email}
         onRefresh={handleRefresh}
+        onLogout={logout}
       />
-      <ApiKeyModal open={keyModalOpen} currentKey={apiKey} onSave={saveApiKey} onClose={closeKeyModal} />
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-5">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">

@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const adminCouponsController = require('../controllers/adminCouponsController');
-const { validateAdminApiKey } = require('../middleware/auth');
+const { requireAdminAuth } = require('../middleware/adminAuth');
 
-router.use(validateAdminApiKey);
+router.use(requireAdminAuth);
 
 router.get('/coupons', adminCouponsController.list);
 router.get('/coupons/redemptions', adminCouponsController.listRedemptions);

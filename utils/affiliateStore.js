@@ -1,6 +1,9 @@
 // utils/affiliateStore.js
+const bcrypt = require('bcryptjs');
 const pool = require('../db/pool');
 const { validateEmail } = require('./helpers');
+
+const BCRYPT_ROUNDS = 10;
 
 const PH_EWALLET_METHODS = ['GCASH', 'MAYA'];
 const PH_BANK_METHODS = ['BDO', 'BPI', 'METROBANK', 'LANDBANK', 'PNB', 'UNIONBANK', 'SECURITY_BANK', 'RCBC', 'OTHER'];
@@ -17,32 +20,8 @@ function isTermsAccepted(value) {
     return value === true || value === 'true' || value === 'on';
 }
 
-/**
- * Validates and normalizes an affiliate registration payload. Field names deliberately
- * mirror the Nexistry affiliate registration form's `buildPayload()` output, so this
- * endpoint can accept that form's submissions directly without remapping.
- */
-function normalizeAffiliate(payload) {
-    if (!payload || typeof payload !== 'object') {
-        throw new Error('Invalid registration payload');
-    }
-
-    const firstName = requireString(payload.firstName, 'firstName');
-    const lastName = requireString(payload.lastName, 'lastName');
-    const email = requireString(payload.email, 'email').toLowerCase();
-    if (!validateEmail(email)) throw new Error('A valid email is required');
-
-    const contactNumber = requireString(payload.contactNumber, 'contactNumber');
-
-    const socials = {
-        facebook: payload.facebook ? String(payload.facebook).trim() : '',
-        instagram: payload.instagram ? String(payload.instagram).trim() : '',
-        tiktok: payload.tiktok ? String(payload.tiktok).trim() : '',
-        linkedin: payload.linkedin ? String(payload.linkedin).trim() : '',
-        youtube: payload.youtube ? String(payload.youtube).trim() : ''
-    };
-    Object.keys(socials).forEach((k) => { if (!socials[k]) delete socials[k]; });
-
+/** Shared by registration and the self-service "edit my payout details" update. */
+function normalizePayoutInput(payload) {
     const paymentRegion = String(payload.paymentRegion || '').trim().toUpperCase();
     if (!['PH', 'GLOBAL'].includes(paymentRegion)) {
         throw new Error('paymentRegion must be "PH" or "GLOBAL"');
@@ -81,13 +60,47 @@ function normalizeAffiliate(payload) {
         if (!validateEmail(payoutDetails.accountEmail)) throw new Error('globalAccountEmail must be a valid email');
     }
 
+    return { paymentRegion, preferredBank, payoutDetails };
+}
+
+/**
+ * Validates and normalizes an affiliate registration payload. Field names deliberately
+ * mirror the Nexistry affiliate registration form's `buildPayload()` output, so this
+ * endpoint can accept that form's submissions directly without remapping.
+ */
+function normalizeAffiliate(payload) {
+    if (!payload || typeof payload !== 'object') {
+        throw new Error('Invalid registration payload');
+    }
+
+    const firstName = requireString(payload.firstName, 'firstName');
+    const lastName = requireString(payload.lastName, 'lastName');
+    const email = requireString(payload.email, 'email').toLowerCase();
+    if (!validateEmail(email)) throw new Error('A valid email is required');
+
+    const password = String(payload.password || '');
+    if (password.length < 8) throw new Error('Password must be at least 8 characters');
+
+    const contactNumber = requireString(payload.contactNumber, 'contactNumber');
+
+    const socials = {
+        facebook: payload.facebook ? String(payload.facebook).trim() : '',
+        instagram: payload.instagram ? String(payload.instagram).trim() : '',
+        tiktok: payload.tiktok ? String(payload.tiktok).trim() : '',
+        linkedin: payload.linkedin ? String(payload.linkedin).trim() : '',
+        youtube: payload.youtube ? String(payload.youtube).trim() : ''
+    };
+    Object.keys(socials).forEach((k) => { if (!socials[k]) delete socials[k]; });
+
+    const { paymentRegion, preferredBank, payoutDetails } = normalizePayoutInput(payload);
+
     if (!isTermsAccepted(payload.termsAccepted)) {
         throw new Error('Terms and conditions must be accepted');
     }
     const termsVersion = payload.termsVersion ? String(payload.termsVersion).trim() : '';
 
     return {
-        firstName, lastName, email, contactNumber, socials,
+        firstName, lastName, email, password, contactNumber, socials,
         paymentRegion, preferredBank, payoutDetails,
         termsAccepted: true, termsVersion
     };
@@ -132,19 +145,42 @@ async function findAffiliateById(id) {
 
 async function createAffiliate(normalized, couponCode) {
     const id = `AFF${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const passwordHash = await bcrypt.hash(normalized.password, BCRYPT_ROUNDS);
 
     const { rows } = await pool.query(
-        `INSERT INTO affiliates (id, first_name, last_name, email, contact_number, socials, payment_region, preferred_bank, payout_details, terms_accepted, terms_version, coupon_code, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'active')
+        `INSERT INTO affiliates (id, first_name, last_name, email, contact_number, socials, payment_region, preferred_bank, payout_details, terms_accepted, terms_version, coupon_code, status, password_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'active',$13)
          RETURNING *`,
         [
             id, normalized.firstName, normalized.lastName, normalized.email, normalized.contactNumber,
             JSON.stringify(normalized.socials || {}), normalized.paymentRegion, normalized.preferredBank,
             JSON.stringify(normalized.payoutDetails || {}), normalized.termsAccepted, normalized.termsVersion || null,
-            couponCode
+            couponCode, passwordHash
         ]
     );
     return rowToAffiliate(rows[0]);
+}
+
+/** Verifies email+password. Returns the affiliate record (safe shape) on success, or null. */
+async function verifyAffiliateCredentials({ email, password }) {
+    const normalized = String(email || '').trim().toLowerCase();
+    if (!normalized) return null;
+    const { rows } = await pool.query('SELECT * FROM affiliates WHERE email = $1', [normalized]);
+    const row = rows[0];
+    if (!row || !row.password_hash || row.status === 'terminated') return null;
+    const matches = await bcrypt.compare(String(password || ''), row.password_hash);
+    if (!matches) return null;
+    return rowToAffiliate(row);
+}
+
+/** Lets a logged-in affiliate update their own payout method/details. */
+async function updateAffiliatePayout(id, payload) {
+    const { paymentRegion, preferredBank, payoutDetails } = normalizePayoutInput(payload);
+    const { rows } = await pool.query(
+        `UPDATE affiliates SET payment_region = $2, preferred_bank = $3, payout_details = $4 WHERE id = $1 RETURNING *`,
+        [id, paymentRegion, preferredBank, JSON.stringify(payoutDetails)]
+    );
+    return rows[0] ? rowToAffiliate(rows[0]) : null;
 }
 
 async function setAffiliateStatus(id, status) {
@@ -168,5 +204,7 @@ module.exports = {
     listAffiliates,
     findAffiliateByEmail,
     findAffiliateById,
-    createAffiliate
+    createAffiliate,
+    verifyAffiliateCredentials,
+    updateAffiliatePayout
 };

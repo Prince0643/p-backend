@@ -88,7 +88,24 @@ CREATE TABLE IF NOT EXISTS affiliates (
     coupon_code             TEXT REFERENCES coupons(code),
     status                  TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'terminated')),
     status_updated_at       TIMESTAMPTZ,
+    -- Login for the affiliate self-service portal. Nullable because affiliates that
+    -- registered before this existed have no password yet - they're simply unable to
+    -- log in until an admin sets one for them (no email/reset-link infra exists here).
+    password_hash           TEXT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
+-- Admin accounts for the console login. The env-configured ADMIN_API_KEY/API_KEY
+-- (see middleware/auth.js) keeps working as a permanent master/bootstrap credential
+-- on top of whatever admin accounts exist here. Any logged-in admin can create
+-- another; all admins have identical full access, no permission tiers.
+CREATE TABLE IF NOT EXISTS admins (
+    id                      TEXT PRIMARY KEY,
+    email                   TEXT NOT NULL UNIQUE,
+    password_hash           TEXT NOT NULL,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at              TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS digital_solutions_transactions (

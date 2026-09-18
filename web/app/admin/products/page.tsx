@@ -2,10 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
-import { ApiKeyModal } from "@/components/ApiKeyModal";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
-import { useApiKey } from "@/lib/useApiKey";
+import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
 
 type Product = {
@@ -48,7 +47,7 @@ function slugify(input: string) {
 }
 
 export default function ProductsPage() {
-  const { ready, apiKey, ensureApiKey, promptForNewKey, keyModalOpen, closeKeyModal, saveApiKey } = useApiKey();
+  const { ready, admin, requireAuth, handleAuthError, logout } = useAdminAuth();
   const { message, toast } = useToast();
 
   const [products, setProducts] = useState<Product[]>([]);
@@ -83,11 +82,11 @@ export default function ProductsPage() {
 
   useEffect(() => {
     if (!ready) return;
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
-    loadProducts(key).catch((e) => toast(e.message));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- ensureApiKey/loadProducts intentionally not deps to avoid refetch loops
+    loadProducts(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/loadProducts intentionally not deps to avoid refetch loops
   }, [ready]);
 
   function fillForm(p: Product | null) {
@@ -109,28 +108,28 @@ export default function ProductsPage() {
   async function selectProduct(p: Product) {
     fillForm(p);
     try {
-      const key = ensureApiKey();
+      const key = requireAuth();
       if (!key) return;
       await refreshSnippet(p.id, key, backendUrl);
     } catch (e) {
-      toast((e as Error).message);
+      if (!handleAuthError(e)) toast((e as Error).message);
     }
   }
 
   async function handleRefresh() {
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     try {
       await loadProducts(key);
       toast("Refreshed.");
     } catch (e) {
-      toast((e as Error).message);
+      if (!handleAuthError(e)) toast((e as Error).message);
     }
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
 
     const payload = {
@@ -159,14 +158,14 @@ export default function ProductsPage() {
       await loadProducts(key);
       await selectProduct(data.product);
     } catch (e) {
-      toast((e as Error).message);
+      if (!handleAuthError(e)) toast((e as Error).message);
     }
   }
 
   async function handleDelete() {
     if (!selectedId) return;
     if (!confirm(`Delete product "${selectedId}"?`)) return;
-    const key = ensureApiKey();
+    const key = requireAuth();
     if (!key) return;
     try {
       await apiFetch(`/api/admin/products/${encodeURIComponent(selectedId)}`, key, { method: "DELETE" });
@@ -175,7 +174,7 @@ export default function ProductsPage() {
       setSnippet("");
       await loadProducts(key);
     } catch (e) {
-      toast((e as Error).message);
+      if (!handleAuthError(e)) toast((e as Error).message);
     }
   }
 
@@ -200,10 +199,10 @@ export default function ProductsPage() {
       <AdminTopbar
         title="Nexistry Backend"
         subtitle="Product Catalog + HTML Snippet Generator"
-        onSetKey={promptForNewKey}
+        adminEmail={admin?.email}
         onRefresh={handleRefresh}
+        onLogout={logout}
       />
-      <ApiKeyModal open={keyModalOpen} currentKey={apiKey} onSave={saveApiKey} onClose={closeKeyModal} />
       <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 py-5 lg:grid-cols-[1fr_1.2fr]">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
@@ -343,9 +342,9 @@ export default function ProductsPage() {
                 onChange={(e) => setBackendUrl(e.target.value)}
                 onBlur={() => {
                   if (!selectedId) return;
-                  const key = ensureApiKey();
+                  const key = requireAuth();
                   if (!key) return;
-                  refreshSnippet(selectedId, key, backendUrl).catch((e) => toast((e as Error).message));
+                  refreshSnippet(selectedId, key, backendUrl).catch((e) => { if (!handleAuthError(e)) toast((e as Error).message); });
                 }}
               />
             </label>

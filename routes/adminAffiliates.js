@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const affiliateController = require('../controllers/affiliateController');
-const { validateAdminApiKey } = require('../middleware/auth');
+const { requireAdminAuth } = require('../middleware/adminAuth');
 
-router.use(validateAdminApiKey);
+router.use(requireAdminAuth);
 
 router.get('/affiliates', affiliateController.list);
 router.get('/affiliates/:id', affiliateController.getOne);

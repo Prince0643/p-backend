@@ -13,6 +13,7 @@ const adminCouponRoutes = require('./routes/adminCoupons');
 const affiliateRoutes = require('./routes/affiliates');
 const adminAffiliateRoutes = require('./routes/adminAffiliates');
 const adminSolutionsRoutes = require('./routes/adminSolutions');
+const adminAuthRoutes = require('./routes/adminAuth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -59,6 +60,11 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 // Routes
 app.use('/api/payments', paymentRoutes);
 app.use('/api/clockistry', clockistryRoutes);
+// adminAuthRoutes must be mounted before the other /api/admin routers below - it's
+// the only one with a public route (/auth/login), and since every router sharing this
+// mount prefix guards itself with a blanket, path-unfiltered auth check, whichever
+// router is mounted first gets first look at any given /api/admin/* request.
+app.use('/api/admin', adminAuthRoutes);
 app.use('/api/admin', adminProductRoutes);
 app.use('/api/admin', adminCouponRoutes);
 app.use('/api/affiliates', affiliateRoutes);

@@ -15,6 +15,7 @@ function registrationPayload(email) {
         firstName: 'Affiliate',
         lastName: 'Test',
         email,
+        password: 'testpassword123',
         contactNumber: '+639171234567',
         paymentRegion: 'GLOBAL',
         preferredBank: 'WISE',

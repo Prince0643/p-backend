@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const adminSolutionsController = require('../controllers/adminSolutionsController');
-const { validateAdminApiKey } = require('../middleware/auth');
+const { requireAdminAuth } = require('../middleware/adminAuth');
 
-router.use(validateAdminApiKey);
+router.use(requireAdminAuth);
 
 router.get('/solutions', adminSolutionsController.list);
 router.get('/solutions/:transactionId', adminSolutionsController.getOne);

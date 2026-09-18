@@ -1,5 +1,6 @@
 const affiliateStore = require('../utils/affiliateStore');
 const couponStore = require('../utils/couponStore');
+const { issueToken } = require('../utils/authToken');
 
 // Flat program-wide rates (see meeting decision: 15% customer discount / 10% affiliate
 // commission for every affiliate, regardless of payout region).
@@ -41,12 +42,18 @@ exports.register = async (req, res) => {
 
         const affiliate = await affiliateStore.createAffiliate(normalized, couponCode);
 
+        // Auto-login: registering creates the account AND the login in one step, so
+        // the new affiliate lands straight on their dashboard with no separate
+        // "verify your email" step (no email-sending infra exists here).
+        const token = issueToken({ type: 'affiliate', id: affiliate.id, email: affiliate.email });
+
         res.status(201).json({
             success: true,
             affiliateId: affiliate.id,
             couponCode: affiliate.couponCode,
             discountPercent: AFFILIATE_DISCOUNT_PERCENT,
-            affiliateFeePercent: AFFILIATE_FEE_PERCENT
+            affiliateFeePercent: AFFILIATE_FEE_PERCENT,
+            token
         });
     } catch (err) {
         res.status(400).json({ error: err.message || 'Failed to register affiliate' });

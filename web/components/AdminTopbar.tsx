@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 
 const NAV = [
   { href: "/admin/products", label: "Products" },
@@ -24,8 +23,6 @@ export function AdminTopbar({
   onRefresh: () => void;
   onLogout: () => void;
 }) {
-  const pathname = usePathname();
-
   return (
     <header className="sticky top-0 z-10 border-b border-white/10 bg-[#0b1220c0] backdrop-blur">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-3.5">
@@ -37,7 +34,7 @@ export function AdminTopbar({
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {NAV.filter((item) => item.href !== pathname).map((item) => (
+          {NAV.map((item) => (
             <Link
               key={item.href}
               href={item.href}

@@ -7,11 +7,16 @@ const { issueToken } = require('../utils/authToken');
 const AFFILIATE_DISCOUNT_PERCENT = 0.15;
 const AFFILIATE_FEE_PERCENT = 0.10;
 
-async function generateUniqueCouponCode(seed) {
-    const base = String(seed || 'AFF').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) || 'AFF';
+const COUPON_CODE_LENGTH = 6;
+const COUPON_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+/** Auto-generated affiliate coupons are a fixed 6-character random code - short and easy to share/type. */
+async function generateUniqueCouponCode() {
     for (let i = 0; i < 10; i++) {
-        const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
-        const code = `${base}${suffix}`;
+        let code = '';
+        for (let j = 0; j < COUPON_CODE_LENGTH; j++) {
+            code += COUPON_CODE_CHARS[Math.floor(Math.random() * COUPON_CODE_CHARS.length)];
+        }
         if (!(await couponStore.findCoupon(code))) return code;
     }
     throw new Error('Failed to generate a unique coupon code, please retry');
@@ -26,7 +31,7 @@ exports.register = async (req, res) => {
             return res.status(409).json({ error: 'This email is already registered as an affiliate' });
         }
 
-        const couponCode = await generateUniqueCouponCode(`${normalized.firstName}${normalized.lastName}`);
+        const couponCode = await generateUniqueCouponCode();
 
         // One-time-use: this code is meant to be shared with exactly one customer.
         await couponStore.upsertCoupon({

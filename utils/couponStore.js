@@ -132,10 +132,28 @@ async function upsertCoupon(payload) {
     return findCoupon(c.code);
 }
 
+// Deliberately not ON DELETE CASCADE on the referencing tables below - a coupon with
+// real redemption history or an affiliate link represents actual payout/financial
+// records, and silently cascading the delete would destroy them. Blocked deletes are
+// turned into a specific, actionable message instead of a raw FK-violation error.
+const COUPON_DELETE_BLOCKED_REASONS = {
+    affiliates: 'it is linked to an affiliate - reassign or terminate that affiliate first, or just set this coupon to Inactive instead of deleting it',
+    coupon_redemptions: 'it has redemption/payout history - set it to Inactive instead of deleting, so that history stays intact',
+    digital_solutions_transactions: 'it is referenced by past transactions - set it to Inactive instead of deleting'
+};
+
 async function deleteCoupon(code) {
     const normalizedCode = toCouponCode(code);
-    const { rowCount } = await pool.query('DELETE FROM coupons WHERE code = $1', [normalizedCode]);
-    return rowCount > 0;
+    try {
+        const { rowCount } = await pool.query('DELETE FROM coupons WHERE code = $1', [normalizedCode]);
+        return rowCount > 0;
+    } catch (err) {
+        if (err.code === '23503') {
+            const reason = COUPON_DELETE_BLOCKED_REASONS[err.table] || 'it is still referenced elsewhere';
+            throw new Error(`Cannot delete coupon "${normalizedCode}" because ${reason}.`);
+        }
+        throw err;
+    }
 }
 
 // A 'pending' redemption (reserved at checkout creation, before payment) still counts

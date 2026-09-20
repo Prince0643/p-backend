@@ -41,7 +41,11 @@ exports.remove = async (req, res) => {
         if (!ok) return res.status(404).json({ error: 'Coupon not found' });
         res.json({ success: true });
     } catch (err) {
-        res.status(500).json({ error: err.message || 'Failed to delete coupon' });
+        // deleteCoupon() throws a specific "Cannot delete coupon..." message when it's
+        // blocked by real linked data (affiliate/redemptions/transactions) - that's a
+        // conflict the admin can act on, not a server error.
+        const isBlockedDelete = /^Cannot delete coupon/.test(err.message || '');
+        res.status(isBlockedDelete ? 409 : 500).json({ error: err.message || 'Failed to delete coupon' });
     }
 };
 

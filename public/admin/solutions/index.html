@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nexistry Backend - Digital Solutions Tracker</title>
+  <link rel="stylesheet" href="/public/admin/solutions/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container">
+      <div class="brand">
+        <div class="brand__title">Nexistry Backend</div>
+        <div class="brand__subtitle">Digital Solutions Tracker</div>
+      </div>
+      <div class="topbar__actions">
+        <a class="btn btn--ghost" href="/admin/affiliates">Affiliates</a>
+        <a class="btn btn--ghost" href="/admin/coupons">Coupons</a>
+        <a class="btn btn--ghost" href="/admin/products">Products</a>
+        <button id="setKeyBtn" class="btn btn--ghost">Set API Key</button>
+        <button id="refreshBtn" class="btn btn--ghost">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="panel">
+      <div class="panel__header">
+        <h2>Transactions</h2>
+        <div class="row">
+          <select id="typeFilter" class="input">
+            <option value="">All types</option>
+            <option value="academy_product">Academy Product</option>
+            <option value="clockistry_subscription">Clockistry Subscription</option>
+          </select>
+          <select id="statusFilter" class="input">
+            <option value="">All statuses</option>
+            <option value="initiated">Initiated</option>
+            <option value="paid">Paid</option>
+            <option value="failed">Failed</option>
+          </select>
+          <input id="searchInput" class="input" placeholder="Search name, email, company, transaction ID…" />
+        </div>
+      </div>
+      <div class="note">
+        Local ledger of every checkout this backend has created since this tracker was deployed.
+        Does not include historical transactions from before this feature existed.
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="txTable">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Type</th>
+              <th>Transaction ID</th>
+              <th>Customer</th>
+              <th>Company/Product</th>
+              <th>Amount</th>
+              <th>Created</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody id="txBody"></tbody>
+        </table>
+      </div>
+      <div id="toast" class="toast hidden"></div>
+    </section>
+  </main>
+
+  <script src="/public/admin/solutions/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nexistry Backend - Coupons</title>
+  <link rel="stylesheet" href="/public/admin/coupons/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="container">
+      <div class="brand">
+        <div class="brand__title">Nexistry Backend</div>
+        <div class="brand__subtitle">Coupons + Affiliate Payout Tracking</div>
+      </div>
+      <div class="topbar__actions">
+        <a class="btn btn--ghost" href="/admin/affiliates">Affiliates</a>
+        <a class="btn btn--ghost" href="/admin/products">Products</a>
+        <a class="btn btn--ghost" href="/admin/solutions">Solutions</a>
+        <button id="setKeyBtn" class="btn btn--ghost">Set API Key</button>
+        <button id="refreshBtn" class="btn btn--ghost">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container layout">
+    <section class="panel">
+      <div class="panel__header">
+        <h2>Coupons</h2>
+        <div class="row">
+          <input id="searchInput" class="input" placeholder="Search coupons…" />
+          <button id="newBtn" class="btn">New Coupon</button>
+        </div>
+      </div>
+      <div id="couponsList" class="list"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__header">
+        <h2 id="formTitle">New Coupon</h2>
+        <div class="row">
+          <button id="deleteBtn" class="btn btn--danger hidden">Delete</button>
+          <button id="resetBtn" class="btn btn--ghost">Reset</button>
+        </div>
+      </div>
+
+      <form id="couponForm" class="form">
+        <div class="grid">
+          <label class="field">
+            <div class="field__label">Code</div>
+            <input id="codeInput" class="input" required placeholder="e.g. FATHERSDAY15" style="text-transform:uppercase" />
+            <div class="field__hint">What the customer enters at checkout. Uppercased automatically.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Discount %</div>
+            <input id="discountPercentInput" class="input" type="number" min="0" max="100" step="0.01" required placeholder="e.g. 15" />
+            <div class="field__hint">Applied to the catalog price server-side. Enter 15 for 15%.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Affiliate fee %</div>
+            <input id="affiliateFeePercentInput" class="input" type="number" min="0" max="100" step="0.01" placeholder="e.g. 10" />
+            <div class="field__hint">Owed to the affiliate on the discounted (post-discount) base amount. Leave 0 for site-wide promos with no affiliate.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Affiliate email</div>
+            <input id="affiliateEmailInput" class="input" type="email" placeholder="affiliate@example.com" />
+            <div class="field__hint">Optional. Who the affiliate fee is owed to.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Expires at</div>
+            <input id="expiresAtInput" class="input" type="datetime-local" />
+            <div class="field__hint">Optional. Leave blank for no expiry. Local browser time.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Max redemptions</div>
+            <input id="maxRedemptionsInput" class="input" type="number" min="1" step="1" placeholder="e.g. 100" />
+            <div class="field__hint">Optional. Leave blank for unlimited.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Eligible product IDs</div>
+            <input id="productIdsInput" class="input" placeholder="e.g. start_up_va_course, freelancer_plan" />
+            <div class="field__hint">Comma-separated product IDs. Leave blank to allow all products.</div>
+          </label>
+          <label class="field">
+            <div class="field__label">Status</div>
+            <select id="activeInput" class="input">
+              <option value="true">Active</option>
+              <option value="false">Inactive</option>
+            </select>
+          </label>
+          <label class="field field--wide">
+            <div class="field__label">Notes</div>
+            <input id="notesInput" class="input" placeholder="Internal notes (not shown to customer)" />
+          </label>
+        </div>
+
+        <div class="row row--end">
+          <button type="submit" class="btn">Save Coupon</button>
+        </div>
+      </form>
+
+      <div class="panel__divider"></div>
+
+      <div class="panel__header">
+        <h2>Redemptions &amp; Affiliate Payouts</h2>
+        <div class="row">
+          <select id="statusFilter" class="input">
+            <option value="">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="paid">Paid</option>
+          </select>
+          <button id="loadRedemptionsBtn" class="btn btn--ghost">Load</button>
+          <button id="markPaidBtn" class="btn">Mark Selected Paid</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="redemptionsTable">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Code</th>
+              <th>Payment Ref</th>
+              <th>Customer</th>
+              <th>Base</th>
+              <th>Discount</th>
+              <th>Affiliate Fee</th>
+              <th>Affiliate</th>
+              <th>Status</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody id="redemptionsBody"></tbody>
+        </table>
+      </div>
+      <div id="toast" class="toast hidden"></div>
+    </section>
+  </main>
+
+  <script src="/public/admin/coupons/app.js"></script>
+</body>
+</html>

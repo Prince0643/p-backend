@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
+import { BrandMark } from "@/components/BrandMark";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -44,7 +45,9 @@ export default function AdminLoginPage() {
         onSubmit={handleSubmit}
         className="w-full max-w-sm rounded-2xl border border-white/10 bg-white/[.03] p-6 shadow-2xl"
       >
-        <div className="mb-1 text-xs font-bold uppercase tracking-widest text-blue-400">Nexistry Digital Solutions</div>
+        <div className="mb-5">
+          <BrandMark subtitle="Admin Console" />
+        </div>
         <h1 className="mb-1 text-xl font-extrabold">Admin Console Login</h1>
         <Link href="/" className="mb-6 inline-block text-xs text-slate-400 underline hover:text-slate-300">
           ← Not an admin? Go back
@@ -60,7 +63,7 @@ export default function AdminLoginPage() {
           autoFocus
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="mt-1.5 mb-4 w-full rounded-lg border border-white/10 bg-[#0b1424] px-3 py-2 text-sm text-slate-100 outline-none focus:border-blue-500"
+          className="mt-1.5 mb-4 w-full rounded-lg border border-white/10 bg-[#0b1424] px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-300"
         />
 
         <label className="block text-sm font-semibold" htmlFor="admin-password">
@@ -72,7 +75,7 @@ export default function AdminLoginPage() {
           required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="mt-1.5 mb-4 w-full rounded-lg border border-white/10 bg-[#0b1424] px-3 py-2 text-sm text-slate-100 outline-none focus:border-blue-500"
+          className="mt-1.5 mb-4 w-full rounded-lg border border-white/10 bg-[#0b1424] px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-300"
         />
 
         {error && (
@@ -84,7 +87,7 @@ export default function AdminLoginPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="w-full rounded-lg bg-gradient-to-b from-blue-400 to-blue-500 px-3 py-2.5 text-sm font-extrabold text-slate-950 disabled:opacity-50"
+          className="brand-action w-full py-2.5"
         >
           {submitting ? "Logging in…" : "Log In"}
         </button>

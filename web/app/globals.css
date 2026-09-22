@@ -1,8 +1,12 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0b1220;
-  --foreground: #e7eefc;
+  --background: #07111f;
+  --foreground: #eef8ff;
+  --brand-cyan: #11aee6;
+  --brand-blue: #087dcc;
+  --brand-gold: #ffba08;
+  --brand-amber: #f59f00;
 }
 
 @theme inline {
@@ -14,8 +18,9 @@
 
 body {
   background:
-    radial-gradient(1200px 900px at 10% -10%, rgba(78, 168, 255, 0.2), transparent 60%),
-    radial-gradient(1200px 900px at 110% 10%, rgba(129, 89, 255, 0.18), transparent 55%),
+    radial-gradient(1100px 760px at 6% -10%, rgba(17, 174, 230, 0.2), transparent 58%),
+    radial-gradient(900px 620px at 105% 0%, rgba(255, 186, 8, 0.14), transparent 54%),
+    linear-gradient(135deg, rgba(8, 125, 204, 0.08), transparent 42%),
     var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
@@ -24,6 +29,18 @@ body {
 
 @layer components {
   .input {
-    @apply w-full min-h-[42px] rounded-lg border border-white/10 bg-[#0c162ce6] px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20;
+    @apply w-full min-h-[42px] rounded-lg border border-white/10 bg-[#0c162ce6] px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-300 focus:ring-2 focus:ring-cyan-300/20;
+  }
+
+  .brand-action {
+    @apply rounded-lg bg-gradient-to-b from-cyan-300 to-sky-500 px-3 py-2 text-sm font-extrabold text-slate-950 shadow-[0_12px_34px_rgba(14,165,233,.18)] transition hover:brightness-110 disabled:opacity-50;
+  }
+
+  .brand-action-wide {
+    @apply flex min-h-[48px] w-full items-center justify-center rounded-xl bg-gradient-to-br from-cyan-300 via-sky-400 to-amber-300 text-[15px] font-extrabold text-slate-950 shadow-[0_16px_42px_rgba(14,165,233,.18)] transition hover:brightness-110 disabled:opacity-60;
+  }
+
+  .brand-link {
+    @apply text-cyan-300 underline decoration-amber-300/60 underline-offset-2 hover:text-amber-200;
   }
 }

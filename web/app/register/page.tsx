@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAffiliateAuth } from "@/lib/useAffiliateAuth";
+import { BrandMark } from "@/components/BrandMark";
 
 const PH_BANKS = [
   { value: "BDO", label: "Banco de Oro (BDO)" },
@@ -87,10 +88,10 @@ export default function RegisterPage() {
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-10">
       <header className="mb-7 text-center">
-        <div className="mb-2.5 text-xs font-extrabold uppercase tracking-[0.14em] text-blue-400">
-          Nexistry Digital Solutions
+        <div className="mb-4 flex justify-center">
+          <BrandMark size="lg" subtitle="Affiliate Program" />
         </div>
-        <h1 className="mb-3 bg-gradient-to-br from-white to-blue-200 bg-clip-text text-4xl font-bold text-transparent">
+        <h1 className="mb-3 bg-gradient-to-br from-white via-cyan-100 to-amber-100 bg-clip-text text-4xl font-bold text-transparent">
           Become an Affiliate
         </h1>
         <p className="mx-auto max-w-lg text-[15px] leading-relaxed text-slate-400">
@@ -109,7 +110,7 @@ export default function RegisterPage() {
             Share this code with your customers — it gives them 15% off and earns you 10% commission. It works once,
             for one customer.
           </p>
-          <div className="mb-4.5 inline-flex items-center gap-3 rounded-xl border border-dashed border-blue-400 bg-blue-400/10 px-4.5 py-3.5">
+          <div className="mb-4.5 inline-flex items-center gap-3 rounded-xl border border-dashed border-cyan-300 bg-cyan-300/10 px-4.5 py-3.5">
             <span className="font-mono text-xl font-extrabold tracking-wider">{result.couponCode}</span>
             <button
               onClick={copyCoupon}
@@ -120,13 +121,13 @@ export default function RegisterPage() {
           </div>
           <button
             onClick={() => router.push("/affiliate/dashboard")}
-            className="mb-4.5 flex min-h-[48px] w-full items-center justify-center rounded-xl bg-gradient-to-br from-blue-400 to-purple-500 text-[15px] font-extrabold text-slate-950"
+            className="brand-action-wide mb-4.5"
           >
             Go to My Dashboard
           </button>
           <p className="text-xs text-slate-400">
             Payouts are processed weekly on Saturdays. Questions? Contact{" "}
-            <a href="mailto:billing@nexistrydigitalsolutions.com" className="text-blue-400">
+            <a href="mailto:billing@nexistrydigitalsolutions.com" className="brand-link">
               billing@nexistrydigitalsolutions.com
             </a>
             .

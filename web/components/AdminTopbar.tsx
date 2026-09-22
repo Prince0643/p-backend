@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { BrandMark } from "@/components/BrandMark";
 
 const NAV = [
   { href: "/admin/dashboard", label: "Dashboard" },
@@ -27,13 +28,7 @@ export function AdminTopbar({
   return (
     <header className="sticky top-0 z-10 border-b border-white/10 bg-[#0b1220c0] backdrop-blur">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-3.5">
-        <div>
-          <div className="text-sm font-extrabold tracking-wide">{title}</div>
-          <div className="text-xs text-slate-400">
-            {subtitle}
-            {adminEmail ? ` · ${adminEmail}` : ""}
-          </div>
-        </div>
+        <BrandMark size="sm" subtitle={`${subtitle || title}${adminEmail ? ` · ${adminEmail}` : ""}`} />
         <div className="flex flex-wrap items-center gap-2">
           {NAV.map((item) => (
             <Link

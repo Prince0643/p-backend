@@ -5,6 +5,7 @@ import { apiFetch } from "@/lib/api";
 import { useAffiliateAuth } from "@/lib/useAffiliateAuth";
 import { useToast } from "@/lib/useToast";
 import { Toast } from "@/components/Toast";
+import { BrandMark } from "@/components/BrandMark";
 
 const PH_BANKS = [
   { value: "BDO", label: "Banco de Oro (BDO)" },
@@ -160,7 +161,7 @@ export default function AffiliateDashboardPage() {
     <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-extrabold uppercase tracking-widest text-blue-400">Nexistry Digital Solutions</div>
+          <BrandMark subtitle="Affiliate Dashboard" />
           <h1 className="text-2xl font-bold">
             Welcome, {affiliate.firstName} {affiliate.lastName}
           </h1>
@@ -190,7 +191,7 @@ export default function AffiliateDashboardPage() {
       <section className="mb-6 rounded-2xl border border-white/10 bg-white/[.03] p-5 shadow-2xl">
         <h2 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-400">Your Coupon Code</h2>
         <div className="flex flex-wrap items-center gap-3">
-          <span className="rounded-xl border border-dashed border-blue-400 bg-blue-400/10 px-4 py-2.5 font-mono text-lg font-extrabold tracking-wider">
+          <span className="rounded-xl border border-dashed border-cyan-300 bg-cyan-300/10 px-4 py-2.5 font-mono text-lg font-extrabold tracking-wider text-cyan-100">
             {affiliate.couponCode}
           </span>
           <button onClick={copyCoupon} className="rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-xs font-bold">
@@ -310,7 +311,7 @@ export default function AffiliateDashboardPage() {
               <button
                 type="submit"
                 disabled={payoutSaving}
-                className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-500 px-4 py-2 text-sm font-extrabold text-slate-950 disabled:opacity-50"
+                className="brand-action"
               >
                 {payoutSaving ? "Saving…" : "Save Payout Details"}
               </button>
@@ -361,7 +362,7 @@ export default function AffiliateDashboardPage() {
 
 function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className={`rounded-2xl border p-4 shadow-xl ${accent ? "border-blue-400/40 bg-blue-400/10" : "border-white/10 bg-white/[.03]"}`}>
+    <div className={`rounded-2xl border p-4 shadow-xl ${accent ? "border-cyan-300/40 bg-cyan-300/10" : "border-white/10 bg-white/[.03]"}`}>
       <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</div>
       <div className="mt-1 text-2xl font-extrabold">{value}</div>
     </div>

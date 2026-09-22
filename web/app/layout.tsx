@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nexistry Backend",
-  description: "Nexistry Digital Solutions admin console and affiliate registration.",
+  title: "Nexistry Core Portal",
+  description: "Nexistry Core admin console and affiliate portal.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

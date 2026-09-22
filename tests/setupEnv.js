@@ -14,6 +14,8 @@ process.env.DATABASE_URL = process.env.TEST_DATABASE_URL
 process.env.PAYMONGO_WEBHOOK_SECRET = 'test_webhook_secret_for_automated_tests';
 process.env.ADMIN_API_KEY = 'test_admin_key_for_automated_tests';
 process.env.AUTH_TOKEN_SECRET = 'test_auth_token_secret_for_automated_tests';
+delete process.env.GHL_PRIVATE_KEY;
+delete process.env.GHL_LOCATION_ID;
 
 module.exports = {
     hasPaymongoKey: Boolean(process.env.PAYMONGO_SECRET_KEY)

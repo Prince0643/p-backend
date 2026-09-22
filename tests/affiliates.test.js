@@ -5,6 +5,7 @@ const request = require('supertest');
 const app = require('../index');
 const pool = require('../db/pool');
 const couponStore = require('../utils/couponStore');
+const ghlService = require('../services/ghlService');
 const { cleanupAffiliate } = require('./fixtures');
 
 const ADMIN_KEY = process.env.ADMIN_API_KEY;
@@ -44,6 +45,44 @@ test('affiliate suspension deactivates their linked coupon', async () => {
         coupon = await couponStore.findCoupon(couponCode);
         assert.equal(coupon.active, false);
     } finally {
+        await cleanupAffiliate(email);
+    }
+});
+
+test('affiliate registration creates the generated coupon in GHL when configured', async () => {
+    const email = `affiliate.ghl.${Date.now()}@example.com`;
+    const originalPrivateKey = ghlService.privateKey;
+    const originalLocationId = ghlService.locationId;
+    const originalClient = ghlService.client;
+    const calls = [];
+
+    ghlService.privateKey = 'test_ghl_key';
+    ghlService.locationId = 'test_location_id';
+    ghlService.client = {
+        post: async (path, payload, config) => {
+            calls.push({ path, payload, config });
+            return { data: { _id: 'ghl_coupon_id', code: payload.code } };
+        }
+    };
+
+    try {
+        const reg = await request(app).post('/api/affiliates/register').send(registrationPayload(email));
+        assert.equal(reg.status, 201);
+        assert.equal(reg.body.ghlCouponId, 'ghl_coupon_id');
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].path, '/payments/coupon');
+        assert.equal(calls[0].payload.altId, 'test_location_id');
+        assert.equal(calls[0].payload.altType, 'location');
+        assert.equal(calls[0].payload.code, reg.body.couponCode);
+        assert.equal(calls[0].payload.discountType, 'percentage');
+        assert.equal(calls[0].payload.discountValue, 15);
+        assert.equal(calls[0].payload.usageLimit, 1);
+        assert.equal(calls[0].payload.limitPerCustomer, true);
+        assert.equal(calls[0].config.headers.Version, '2021-04-15');
+    } finally {
+        ghlService.privateKey = originalPrivateKey;
+        ghlService.locationId = originalLocationId;
+        ghlService.client = originalClient;
         await cleanupAffiliate(email);
     }
 });

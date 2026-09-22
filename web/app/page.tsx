@@ -23,7 +23,7 @@ export default function Home() {
           Affiliate Login
         </Link>
         <Link
-          href="/admin/login"
+          href="/admin/dashboard"
           className="rounded-xl border border-white/10 bg-white/5 px-5 py-3 font-bold text-slate-100 hover:bg-white/10"
         >
           Admin Console

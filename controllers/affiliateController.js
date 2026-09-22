@@ -1,6 +1,7 @@
 const affiliateStore = require('../utils/affiliateStore');
 const couponStore = require('../utils/couponStore');
 const { issueToken } = require('../utils/authToken');
+const ghlService = require('../services/ghlService');
 
 // Flat program-wide rates (see meeting decision: 15% customer discount / 10% affiliate
 // commission for every affiliate, regardless of payout region).
@@ -46,6 +47,20 @@ exports.register = async (req, res) => {
         });
 
         const affiliate = await affiliateStore.createAffiliate(normalized, couponCode);
+        let ghlCoupon = null;
+        if (ghlService.isConfigured()) {
+            try {
+                ghlCoupon = await ghlService.createCoupon({
+                    name: `${normalized.firstName} ${normalized.lastName} Affiliate`,
+                    code: couponCode,
+                    discountPercent: AFFILIATE_DISCOUNT_PERCENT,
+                    maxRedemptions: 1
+                });
+                console.log('GHL affiliate coupon created:', ghlCoupon?._id || ghlCoupon?.id || couponCode);
+            } catch (ghlErr) {
+                console.log('GHL affiliate coupon creation failed (non-fatal):', ghlErr.response?.data || ghlErr.message);
+            }
+        }
 
         // Auto-login: registering creates the account AND the login in one step, so
         // the new affiliate lands straight on their dashboard with no separate
@@ -58,6 +73,7 @@ exports.register = async (req, res) => {
             couponCode: affiliate.couponCode,
             discountPercent: AFFILIATE_DISCOUNT_PERCENT,
             affiliateFeePercent: AFFILIATE_FEE_PERCENT,
+            ghlCouponId: ghlCoupon?._id || ghlCoupon?.id || null,
             token
         });
     } catch (err) {

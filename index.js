@@ -87,6 +87,8 @@ if (hasExportedWebApp) {
     app.use(express.static(webOutDir, { redirect: false }));
     const exportedRoutes = [
         '/',
+        '/admin',
+        '/admin/dashboard',
         '/register',
         '/admin/login',
         '/admin/admins',
@@ -108,6 +110,10 @@ if (hasExportedWebApp) {
     });
 } else {
     // Admin UI entry (served from /public)
+    app.get('/admin', (req, res) => {
+        res.redirect('/admin/products');
+    });
+
     app.get('/admin/products', (req, res) => {
         res.sendFile(path.join(__dirname, 'public', 'admin', 'products', 'index.html'));
     });

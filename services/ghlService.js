@@ -79,6 +79,39 @@ class GhlService {
         return res.data;
     }
 
+    isConfigured() {
+        return Boolean(this.privateKey && this.locationId);
+    }
+
+    async createCoupon({ name, code, discountPercent, maxRedemptions, productIds = [], expiresAt }) {
+        if (!this.isConfigured()) {
+            throw new Error('GHL_PRIVATE_KEY and GHL_LOCATION_ID are required to create a GHL coupon');
+        }
+
+        const payload = {
+            altId: this.locationId,
+            altType: 'location',
+            name: name || code,
+            code,
+            discountType: 'percentage',
+            discountValue: Number((Number(discountPercent || 0) * 100).toFixed(4)),
+            startDate: new Date().toISOString(),
+            usageLimit: maxRedemptions || undefined,
+            productIds: Array.isArray(productIds) && productIds.length ? productIds : undefined,
+            endDate: expiresAt || undefined,
+            applyToFuturePayments: true,
+            applyToFuturePaymentsConfig: { type: 'forever' },
+            limitPerCustomer: true
+        };
+
+        Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+
+        const res = await this.client.post('/payments/coupon', payload, {
+            headers: { Version: '2021-04-15' }
+        });
+        return res.data;
+    }
+
     async createInvoice({ contactId, contactDetails, items, name, currency, issueDate, dueDate }) {
         const normalizedPhoneNo = this.normalizePhoneE164(contactDetails?.phoneNo);
         const normalizedContactDetails = {

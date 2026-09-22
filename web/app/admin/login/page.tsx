@@ -30,7 +30,7 @@ export default function AdminLoginPage() {
         throw new ApiError(data?.error || `Login failed (${res.status})`);
       }
       setSession({ token: data.token, admin: data.admin });
-      router.push("/admin/products");
+      router.push("/admin/dashboard");
     } catch (err) {
       setError((err as Error).message);
     } finally {

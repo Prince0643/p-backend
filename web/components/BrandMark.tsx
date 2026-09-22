@@ -17,7 +17,15 @@ export function BrandMark({
   return (
     <div className="flex items-center gap-3">
       <div className={`${logoSize} overflow-hidden rounded-xl border border-cyan-300/25 bg-white p-1 shadow-[0_0_30px_rgba(14,165,233,.18)]`}>
-        <Image src={LOGO_SRC} alt="Nexistry Core" width={96} height={96} className="h-full w-full object-contain" priority={size === "lg"} />
+        <Image
+          src={LOGO_SRC}
+          alt="Nexistry Core"
+          width={96}
+          height={96}
+          className="h-full w-full object-contain"
+          priority={size === "lg"}
+          unoptimized
+        />
       </div>
       {showText && (
         <div>

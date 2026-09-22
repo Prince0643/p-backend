@@ -95,22 +95,65 @@ function shortDate(value: string | null) {
   }).format(new Date(value));
 }
 
+function phtLocalToUtcMs(date: Date) {
+  return Date.UTC(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getHours() - 8,
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds()
+  );
+}
+
+function getCommissionPeriod(now = new Date()) {
+  const phtNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Manila" }));
+  const saturday = 6;
+  const resetHour = 19;
+
+  const currentWeekReset = new Date(phtNow);
+  let daysSinceSaturday = phtNow.getDay() - saturday;
+  if (daysSinceSaturday < 0) daysSinceSaturday += 7;
+  currentWeekReset.setDate(phtNow.getDate() - daysSinceSaturday);
+  currentWeekReset.setHours(resetHour, 0, 0, 0);
+
+  const periodStart = new Date(currentWeekReset);
+  if (phtNow < currentWeekReset) {
+    periodStart.setDate(currentWeekReset.getDate() - 7);
+  }
+
+  const periodEnd = new Date(periodStart);
+  periodEnd.setDate(periodStart.getDate() + 7);
+
+  return {
+    periodStartMs: phtLocalToUtcMs(periodStart),
+    periodEndMs: phtLocalToUtcMs(periodEnd),
+    startLabel: periodStart.toLocaleDateString("en-PH", { month: "short", day: "numeric" }),
+    endLabel: periodEnd.toLocaleDateString("en-PH", { weekday: "long", month: "short", day: "numeric" }),
+  };
+}
+
 function getNextPayout(now = new Date()) {
-  const jstNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-  const next = new Date(jstNow);
+  const phtNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Manila" }));
+  const next = new Date(phtNow);
   next.setHours(19, 0, 0, 0);
   const saturday = 6;
-  let daysUntil = saturday - jstNow.getDay();
-  if (daysUntil < 0 || (daysUntil === 0 && jstNow >= next)) daysUntil += 7;
-  next.setDate(jstNow.getDate() + daysUntil);
-  const diff = Math.max(0, next.getTime() - jstNow.getTime());
+  let daysUntil = saturday - phtNow.getDay();
+  if (daysUntil < 0 || (daysUntil === 0 && phtNow >= next)) daysUntil += 7;
+  next.setDate(phtNow.getDate() + daysUntil);
+  const diff = Math.max(0, next.getTime() - phtNow.getTime());
+  const period = getCommissionPeriod(now);
   return {
     label: next.toLocaleDateString("en-PH", { weekday: "long", month: "short", day: "numeric" }),
     days: Math.floor(diff / 86400000),
     hours: Math.floor((diff % 86400000) / 3600000),
     minutes: Math.floor((diff % 3600000) / 60000),
     seconds: Math.floor((diff % 60000) / 1000),
-    jstTime: jstNow.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    phtTime: phtNow.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    periodStartMs: period.periodStartMs,
+    periodEndMs: period.periodEndMs,
+    periodLabel: `${period.startLabel} - ${period.endLabel}`,
   };
 }
 
@@ -184,9 +227,12 @@ export default function AdminDashboardPage() {
   }
 
   const stats = useMemo(() => {
-    const weekAgo = nowMs - 7 * 24 * 60 * 60 * 1000;
+    const period = getCommissionPeriod(new Date(nowMs));
     const paid = data.redemptions.filter((r) => r.status === "paid");
-    const weeklyPaid = paid.filter((r) => new Date(r.paidAt || r.createdAt).getTime() >= weekAgo);
+    const weeklyPaid = paid.filter((r) => {
+      const paidMs = new Date(r.paidAt || r.createdAt).getTime();
+      return paidMs >= period.periodStartMs && paidMs < period.periodEndMs;
+    });
     const pending = data.redemptions.filter((r) => r.status === "pending");
     const activeAffiliates = data.affiliates.filter((a) => a.status === "active");
     const activeCoupons = data.coupons.filter((c) => c.active);
@@ -211,12 +257,16 @@ export default function AdminDashboardPage() {
 
   const affiliateRows = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const period = getCommissionPeriod(new Date(nowMs));
     return data.affiliates
       .map((affiliate) => {
         const redemptions = data.redemptions.filter(
           (r) => r.affiliateEmail === affiliate.email || r.code === affiliate.couponCode
         );
-        const paid = redemptions.filter((r) => r.status === "paid");
+        const paid = redemptions.filter((r) => {
+          const paidMs = new Date(r.paidAt || r.createdAt).getTime();
+          return r.status === "paid" && paidMs >= period.periodStartMs && paidMs < period.periodEndMs;
+        });
         return {
           ...affiliate,
           redemptions: redemptions.length,
@@ -230,7 +280,7 @@ export default function AdminDashboardPage() {
         return `${row.firstName} ${row.lastName} ${row.email} ${row.couponCode} ${row.id}`.toLowerCase().includes(q);
       })
       .sort((a, b) => b.commission - a.commission || b.paidRedemptions - a.paidRedemptions);
-  }, [data.affiliates, data.redemptions, search]);
+  }, [data.affiliates, data.redemptions, search, nowMs]);
 
   const recentRedemptions = useMemo(
     () => [...data.redemptions].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 8),
@@ -254,7 +304,7 @@ export default function AdminDashboardPage() {
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-blue-300">Live tracking</div>
                 <h1 className="mt-2 text-2xl font-extrabold text-white sm:text-3xl">Commission and affiliate control</h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                  Last 7 days of paid coupon redemptions, active affiliate status, and product coverage across the backend.
+                  Current PHT commission week, paid coupon redemptions, active affiliate status, and product coverage across the backend.
                 </p>
               </div>
               <div className="flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-xs font-bold text-emerald-200">
@@ -276,7 +326,8 @@ export default function AdminDashboardPage() {
               <div>
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Next payout</div>
                 <div className="mt-2 text-xl font-extrabold text-white">{clock.label}</div>
-                <p className="mt-1 text-sm text-slate-400">Saturday 7:00 PM JST. Current JST: {clock.jstTime}</p>
+                <p className="mt-1 text-sm text-slate-400">Saturday 7:00 PM PHT. Current PHT: {clock.phtTime}</p>
+                <p className="mt-1 text-xs text-slate-500">Current commission period: {clock.periodLabel}</p>
               </div>
               <button
                 onClick={handleRefresh}

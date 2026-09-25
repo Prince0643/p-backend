@@ -86,7 +86,20 @@ exports.createPaymentIntent = async (req, res) => {
 
         const defaultTaxRate = Number(process.env.TAX_RATE ?? 0.10);
         const coreTaxRate = Number(process.env.NX_CORE_TAX_RATE ?? 0.12);
-        const taxRate = (source === 'nexistry_core_ph') ? coreTaxRate : defaultTaxRate;
+
+        const websiteProducts = [
+            'promo_website_fee_one_time',
+            'promo_website_monthly',
+            'promo_website_with_domain'
+        ];
+
+        const resolvedProductId = String(productId || catalogProduct?.id || '');
+
+        const taxRate =
+            source === 'nexistry_core_ph' ||
+            websiteProducts.includes(resolvedProductId)
+                ? coreTaxRate
+                : defaultTaxRate;
 
         // Pricing is always computed server-side from the catalog price + tax rate.
         // A discount is only applied when a valid, active, non-expired promo code is

@@ -149,6 +149,47 @@ const CAMPAIGN_WITH_AFFILIATE_QUERY = `
     LEFT JOIN affiliates a ON a.coupon_code = c.coupon_code
 `;
 
+const EMPTY_STATS = { paidCount: 0, pendingCount: 0, revenue: 0, discountTotal: 0, commissionTotal: 0 };
+
+/**
+ * One aggregate query (GROUP BY campaign_id) for redemption stats, keyed by campaign id.
+ * revenue/discountTotal/commissionTotal are summed over 'paid' rows only; base_amount is
+ * already net of discount (computed post-discount pre-tax in paymentController), so
+ * revenue does not subtract discount_amount again - matches the admin dashboard convention.
+ */
+async function fetchCampaignStatsMap(campaignIds) {
+    const map = {};
+    if (!Array.isArray(campaignIds) || campaignIds.length === 0) return map;
+    const { rows } = await pool.query(
+        `SELECT
+            campaign_id,
+            COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+            COALESCE(SUM(base_amount) FILTER (WHERE status = 'paid'), 0) AS revenue,
+            COALESCE(SUM(discount_amount) FILTER (WHERE status = 'paid'), 0) AS discount_total,
+            COALESCE(SUM(affiliate_fee_amount) FILTER (WHERE status = 'paid'), 0) AS commission_total
+         FROM coupon_redemptions
+         WHERE campaign_id = ANY($1::text[])
+         GROUP BY campaign_id`,
+        [campaignIds]
+    );
+    for (const row of rows) {
+        map[row.campaign_id] = {
+            paidCount: row.paid_count,
+            pendingCount: row.pending_count,
+            revenue: Number(row.revenue),
+            discountTotal: Number(row.discount_total),
+            commissionTotal: Number(row.commission_total)
+        };
+    }
+    return map;
+}
+
+async function attachStats(campaigns) {
+    const statsMap = await fetchCampaignStatsMap(campaigns.map((c) => c.id));
+    return campaigns.map((c) => ({ ...c, stats: statsMap[c.id] || { ...EMPTY_STATS } }));
+}
+
 async function listCampaigns({ couponCode, active } = {}) {
     const conditions = [];
     const params = [];
@@ -162,16 +203,18 @@ async function listCampaigns({ couponCode, active } = {}) {
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const { rows } = await pool.query(`${CAMPAIGN_WITH_AFFILIATE_QUERY} ${where} ORDER BY c.created_at DESC`, params);
-    return rows.map(rowToCampaign);
+    return attachStats(rows.map(rowToCampaign));
 }
 
 async function findCampaignById(id) {
     if (!id) return null;
     const { rows } = await pool.query(`${CAMPAIGN_WITH_AFFILIATE_QUERY} WHERE c.id = $1`, [id]);
-    return rows[0] ? rowToCampaign(rows[0]) : null;
+    if (!rows[0]) return null;
+    const [campaign] = await attachStats([rowToCampaign(rows[0])]);
+    return campaign;
 }
 
-/** Looks up an active campaign by slug. Not used by any route yet - reserved for future checkout-attribution work. */
+/** Looks up a campaign by slug regardless of active status - caller must check the `active` field itself. */
 async function findCampaignBySlug(slug) {
     const normalized = String(slug || '').trim().toLowerCase();
     if (!normalized) return null;
@@ -318,5 +361,6 @@ module.exports = {
     findCampaignBySlug,
     createCampaign,
     updateCampaign,
-    deleteCampaign
+    deleteCampaign,
+    fetchCampaignStatsMap
 };

@@ -19,7 +19,24 @@ type Campaign = {
   createdAt: string;
   updatedAt: string;
   affiliate: { id: string; firstName: string; lastName: string; email: string } | null;
+  stats: {
+    paidCount: number;
+    pendingCount: number;
+    revenue: number;
+    discountTotal: number;
+    commissionTotal: number;
+  };
 };
+
+const TRACKING_SNIPPET = '<script src="https://api.nexistrydigitalsolutions.com/public/nx-ref.js" async></script>';
+
+function money(value: number, currency = "PHP") {
+  return new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).format(Number(value) || 0);
+}
 
 type Coupon = { code: string; active: boolean; affiliateEmail: string };
 
@@ -42,6 +59,7 @@ export default function CampaignsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedSnippet, setCopiedSnippet] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -175,6 +193,16 @@ export default function CampaignsPage() {
     }
   }
 
+  async function copyTrackingSnippet() {
+    try {
+      await navigator.clipboard.writeText(TRACKING_SNIPPET);
+      setCopiedSnippet(true);
+      setTimeout(() => setCopiedSnippet(false), 2000);
+    } catch {
+      toast("Could not copy - select and copy the snippet manually.");
+    }
+  }
+
   const filtered = useMemo(() => {
     if (!search.trim()) return campaigns;
     const q = search.toLowerCase();
@@ -192,7 +220,30 @@ export default function CampaignsPage() {
         onRefresh={handleRefresh}
         onLogout={logout}
       />
-      <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 pb-16 pt-5 lg:grid-cols-[1.3fr_1fr]">
+      <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-5 pb-16 pt-5">
+        <details className="group rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
+          <summary className="cursor-pointer list-none p-3.5 text-xs font-bold uppercase tracking-wide text-slate-200">
+            Install tracking on checkout pages
+          </summary>
+          <div className="border-t border-white/10 p-3.5">
+            <p className="text-xs text-slate-400">
+              Paste this into each GHL funnel&apos;s Settings → Head tracking code.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <pre className="flex-1 overflow-x-auto rounded-lg border border-white/10 bg-[#0c162ce6] p-2.5 text-[11px]">
+                <code>{TRACKING_SNIPPET}</code>
+              </pre>
+              <button
+                onClick={copyTrackingSnippet}
+                className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-bold hover:bg-white/10"
+              >
+                {copiedSnippet ? "Copied!" : "Copy"}
+              </button>
+            </div>
+          </div>
+        </details>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.3fr_1fr]">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Campaigns</h2>
@@ -216,6 +267,9 @@ export default function CampaignsPage() {
                   <th className="p-2.5">Name</th>
                   <th className="p-2.5">Affiliate</th>
                   <th className="p-2.5">Coupon</th>
+                  <th className="p-2.5">Sales</th>
+                  <th className="p-2.5">Revenue</th>
+                  <th className="p-2.5">Commission</th>
                   <th className="p-2.5">Destination</th>
                   <th className="p-2.5">Link</th>
                   <th className="p-2.5">Active</th>
@@ -224,7 +278,7 @@ export default function CampaignsPage() {
               <tbody>
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-3 text-slate-400">
+                    <td colSpan={9} className="p-3 text-slate-400">
                       No campaigns yet. Create one to generate a shareable affiliate link.
                     </td>
                   </tr>
@@ -252,6 +306,14 @@ export default function CampaignsPage() {
                       )}
                     </td>
                     <td className="p-2.5 font-mono">{c.couponCode}</td>
+                    <td className="p-2.5">
+                      {c.stats.paidCount}
+                      {c.stats.pendingCount > 0 && (
+                        <span className="ml-1 text-[10px] text-slate-400">+{c.stats.pendingCount} pending</span>
+                      )}
+                    </td>
+                    <td className="p-2.5">{money(c.stats.revenue)}</td>
+                    <td className="p-2.5">{money(c.stats.commissionTotal)}</td>
                     <td className="max-w-[160px] truncate p-2.5" title={c.destinationUrl}>
                       {c.destinationUrl}
                     </td>
@@ -373,6 +435,7 @@ export default function CampaignsPage() {
             </div>
           </form>
         </section>
+        </div>
       </main>
       <Toast message={message} />
     </div>

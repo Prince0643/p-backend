@@ -150,7 +150,8 @@ function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalso
     const successUrl = product.defaults.successUrl || '';
     const cancelUrl = product.defaults.cancelUrl || '';
 
-    return `<!-- Nexistry PayMongo Product Snippet: ${product.name} -->
+    return `<script src="${backendUrl}/public/nx-ref.js" async></script>
+<!-- Nexistry PayMongo Product Snippet: ${product.name} -->
 <script>
   // Backend
   const BACKEND_URL = '${backendUrl}';

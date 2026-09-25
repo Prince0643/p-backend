@@ -229,15 +229,15 @@ async function finalizeCouponReservation(client, entry) {
     try {
         const id = `RDM${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
         const { rows } = await client.query(
-            `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending')
+            `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, campaign_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12)
              ON CONFLICT (payment_reference) DO NOTHING
              RETURNING *`,
             [
                 id, toCouponCode(entry.code), String(entry.paymentReference || ''), entry.productId || null,
                 entry.email || null, entry.fullName || null, Number(entry.baseAmount) || 0,
                 Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
-                entry.affiliateEmail || null, entry.currency || 'PHP'
+                entry.affiliateEmail || null, entry.currency || 'PHP', entry.campaignId || null
             ]
         );
         if (!rows[0]) {
@@ -307,7 +307,8 @@ function rowToRedemption(row) {
         status: row.status,
         createdAt: new Date(row.created_at).toISOString(),
         paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : null,
-        releasedAt: row.released_at ? new Date(row.released_at).toISOString() : null
+        releasedAt: row.released_at ? new Date(row.released_at).toISOString() : null,
+        campaignId: row.campaign_id || null
     };
 }
 
@@ -317,21 +318,40 @@ function rowToRedemption(row) {
  * matching reservation (e.g. rows from before reservations existed) - normal checkouts
  * should already have a pending row that markReservationPaid can confirm instead.
  */
-async function recordRedemption(entry) {
+async function insertRedemptionPaid(entry, campaignId) {
     const id = `RDM${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
     const { rows } = await pool.query(
-        `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, paid_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'paid',now())
+        `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, paid_at, campaign_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'paid',now(),$12)
          ON CONFLICT (payment_reference) DO NOTHING
          RETURNING *`,
         [
             id, toCouponCode(entry.code), String(entry.paymentReference || ''), entry.productId || null,
             entry.email || null, entry.fullName || null, Number(entry.baseAmount) || 0,
             Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
-            entry.affiliateEmail || null, entry.currency || 'PHP'
+            entry.affiliateEmail || null, entry.currency || 'PHP', campaignId || null
         ]
     );
     return rows[0] ? rowToRedemption(rows[0]) : null;
+}
+
+/**
+ * Records a redemption directly as 'paid' (see doc comment above). entry.campaignId comes
+ * from PayMongo webhook metadata, which was captured at checkout time and can go stale -
+ * e.g. an admin deletes the campaign between checkout and the payment.paid webhook firing.
+ * If the FK insert fails because campaign_id no longer references a row (23503), retry once
+ * with campaign_id nulled out rather than losing the whole redemption record.
+ */
+async function recordRedemption(entry) {
+    try {
+        return await insertRedemptionPaid(entry, entry.campaignId || null);
+    } catch (err) {
+        if (err.code === '23503' && err.constraint && String(err.constraint).includes('campaign')) {
+            console.log('recordRedemption: campaign_id no longer references an existing campaign, retrying without it:', entry.campaignId);
+            return await insertRedemptionPaid(entry, null);
+        }
+        throw err;
+    }
 }
 
 async function listRedemptions({ code, status } = {}) {

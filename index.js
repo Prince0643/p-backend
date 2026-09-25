@@ -56,6 +56,16 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Serve the checkout-attribution script cross-origin (GHL funnel pages load it from a
+// different domain), overriding helmet's default same-origin CORP just for this one
+// file - every other file under /public keeps helmet's defaults via the static mount below.
+app.get('/public/nx-ref.js', (req, res) => {
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.set('Content-Type', 'application/javascript; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    res.sendFile(path.join(__dirname, 'public', 'nx-ref.js'));
+});
+
 // Static files (if needed)
 app.use('/public', express.static(path.join(__dirname, 'public')));
 const webOutDir = path.join(__dirname, 'web', 'out');

@@ -46,6 +46,9 @@ exports.me = async (req, res) => {
 
 // GET /api/affiliates/me/campaigns (requires auth) - read-only list of the logged-in
 // affiliate's own active campaigns, so they can copy/share their links.
+// listCampaigns already attaches full stats {paidCount, pendingCount, revenue, discountTotal,
+// commissionTotal} via campaignStore.fetchCampaignStatsMap (one aggregate query, no N+1) - the
+// affiliate dashboard only needs paidCount/commissionTotal from it, extra fields are harmless.
 exports.myCampaigns = async (req, res) => {
     try {
         const affiliate = req.affiliate;

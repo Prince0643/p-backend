@@ -58,6 +58,7 @@ type Campaign = {
   destinationUrl: string;
   link: string;
   notes: string;
+  stats?: { paidCount: number; commissionTotal: number };
 };
 
 function statusPill(status: string) {
@@ -251,6 +252,12 @@ export default function AffiliateDashboardPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="font-bold">{c.name}</div>
+                    <div className="mt-0.5 text-xs text-slate-400">
+                      {c.stats?.paidCount ?? 0} paid sales
+                      {(c.stats?.commissionTotal ?? 0) > 0 && (
+                        <> · ₱{Number(c.stats?.commissionTotal ?? 0).toLocaleString()} earned</>
+                      )}
+                    </div>
                     {c.notes && <div className="mt-0.5 text-xs text-slate-400">{c.notes}</div>}
                   </div>
                   <button

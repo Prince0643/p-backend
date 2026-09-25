@@ -163,3 +163,8 @@ CREATE TABLE IF NOT EXISTS campaigns (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_campaigns_coupon_code ON campaigns(coupon_code);
+
+-- Attributes a redemption to the campaign link that drove it (checkout auto-attribution).
+-- Must come after the campaigns table is created (coupon_redemptions is created earlier in this file).
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_campaign_id ON coupon_redemptions(campaign_id);

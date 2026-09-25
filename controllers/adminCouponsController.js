@@ -6,6 +6,8 @@ const {
     listRedemptions,
     markRedemptionsPaid
 } = require('../utils/couponStore');
+const affiliateStore = require('../utils/affiliateStore');
+const ghlService = require('../services/ghlService');
 
 exports.list = async (req, res) => {
     try {
@@ -13,6 +15,57 @@ exports.list = async (req, res) => {
         res.json({ success: true, coupons });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list coupons' });
+    }
+};
+
+exports.listGhlCoupons = async (req, res) => {
+    try {
+        const [ghlResult, affiliates] = await Promise.all([
+            ghlService.listCouponsAcrossLocations({
+                search: req.query.search,
+                status: req.query.status
+            }),
+            affiliateStore.listAffiliates()
+        ]);
+
+        const affiliatesByCode = new Map(
+            affiliates
+                .filter((affiliate) => affiliate.couponCode)
+                .map((affiliate) => [String(affiliate.couponCode).toUpperCase(), affiliate])
+        );
+        const coupons = ghlResult.coupons.map((coupon) => {
+            const affiliate = affiliatesByCode.get(String(coupon.code || '').toUpperCase());
+            return {
+                ...coupon,
+                affiliate: affiliate
+                    ? {
+                        id: affiliate.id,
+                        name: `${affiliate.firstName} ${affiliate.lastName}`.trim(),
+                        email: affiliate.email,
+                        status: affiliate.status
+                    }
+                    : null
+            };
+        });
+
+        res.json({
+            success: true,
+            coupons,
+            locations: ghlResult.locations,
+            errors: ghlResult.errors
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to list GHL coupons' });
+    }
+};
+
+exports.syncGhlCoupons = async (req, res) => {
+    try {
+        const coupons = await listCoupons();
+        const result = await ghlService.syncCouponsToGhlLocations(coupons);
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to sync coupons to GHL' });
     }
 };
 

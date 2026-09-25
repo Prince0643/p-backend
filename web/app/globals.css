@@ -17,11 +17,7 @@
 }
 
 body {
-  background:
-    radial-gradient(1100px 760px at 6% -10%, rgba(17, 174, 230, 0.2), transparent 58%),
-    radial-gradient(900px 620px at 105% 0%, rgba(255, 186, 8, 0.14), transparent 54%),
-    linear-gradient(135deg, rgba(8, 125, 204, 0.08), transparent 42%),
-    var(--background);
+  background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
   min-height: 100vh;
@@ -33,11 +29,11 @@ body {
   }
 
   .brand-action {
-    @apply rounded-lg bg-gradient-to-b from-cyan-300 to-sky-500 px-3 py-2 text-sm font-extrabold text-slate-950 shadow-[0_12px_34px_rgba(14,165,233,.18)] transition hover:brightness-110 disabled:opacity-50;
+    @apply rounded-lg bg-cyan-300 px-3 py-2 text-sm font-extrabold text-slate-950 shadow-[0_12px_34px_rgba(14,165,233,.18)] transition hover:bg-cyan-200 disabled:opacity-50;
   }
 
   .brand-action-wide {
-    @apply flex min-h-[48px] w-full items-center justify-center rounded-xl bg-gradient-to-br from-cyan-300 via-sky-400 to-amber-300 text-[15px] font-extrabold text-slate-950 shadow-[0_16px_42px_rgba(14,165,233,.18)] transition hover:brightness-110 disabled:opacity-60;
+    @apply flex min-h-[48px] w-full items-center justify-center rounded-xl bg-cyan-300 text-[15px] font-extrabold text-slate-950 shadow-[0_16px_42px_rgba(14,165,233,.18)] transition hover:bg-cyan-200 disabled:opacity-60;
   }
 
   .brand-link {

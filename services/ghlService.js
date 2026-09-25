@@ -83,6 +83,297 @@ class GhlService {
         return Boolean(this.privateKey && this.locationId);
     }
 
+    getConfiguredLocations() {
+        const locations = [];
+
+        if (process.env.GHL_LOCATIONS_JSON) {
+            try {
+                let parsed;
+                try {
+                    parsed = JSON.parse(process.env.GHL_LOCATIONS_JSON);
+                } catch (err) {
+                    parsed = JSON.parse(process.env.GHL_LOCATIONS_JSON.replace(/\\"/g, '"'));
+                }
+                if (Array.isArray(parsed)) {
+                    for (const location of parsed) {
+                        if (location?.locationId && location?.pit) {
+                            locations.push({
+                                name: location.name || location.locationId,
+                                locationId: String(location.locationId),
+                                privateKey: String(location.pit)
+                            });
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('GHL_LOCATIONS_JSON is invalid:', err.message);
+            }
+        }
+
+        if (locations.length === 0 && this.privateKey && this.locationId) {
+            locations.push({
+                name: process.env.GHL_BUSINESS_NAME || this.locationId,
+                locationId: this.locationId,
+                privateKey: this.privateKey
+            });
+        }
+
+        return locations;
+    }
+
+    createClient({ privateKey, locationId, version = '2021-07-28' }) {
+        return axios.create({
+            baseURL: this.baseURL,
+            timeout: 15000,
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${privateKey}`,
+                Version: version,
+                LocationId: locationId
+            }
+        });
+    }
+
+    normalizeCoupon(coupon, location) {
+        return {
+            id: coupon._id || coupon.id || coupon.couponId || '',
+            code: coupon.code || coupon.couponCode || '',
+            name: coupon.name || '',
+            status: coupon.status || '',
+            discountType: coupon.discountType || coupon.type || '',
+            discountValue: coupon.discountValue ?? coupon.value ?? null,
+            usageLimit: coupon.usageLimit ?? coupon.maxRedemptions ?? null,
+            redemptionCount: coupon.redemptionCount ?? coupon.usageCount ?? coupon.usedCount ?? null,
+            startDate: coupon.startDate || coupon.startsAt || null,
+            endDate: coupon.endDate || coupon.expiresAt || null,
+            createdAt: coupon.createdAt || null,
+            locationName: location.name,
+            locationId: location.locationId
+        };
+    }
+
+    async listCouponsForLocation(location, { search, status, limit = 100 } = {}) {
+        const client = this.createClient({
+            privateKey: location.privateKey,
+            locationId: location.locationId,
+            version: 'v3'
+        });
+        const pageSize = Math.min(Math.max(Number(limit) || 100, 1), 100);
+        const allCoupons = [];
+        let offset = 0;
+        let totalCount = null;
+
+        do {
+            const params = {
+                altId: location.locationId,
+                altType: 'location',
+                limit: pageSize,
+                offset
+            };
+            if (search) params.search = String(search);
+            if (status) params.status = String(status);
+
+            const res = await client.get('/payments/coupon/list', { params });
+            const page = Array.isArray(res.data?.data)
+                ? res.data.data
+                : Array.isArray(res.data?.coupons)
+                    ? res.data.coupons
+                    : Array.isArray(res.data)
+                        ? res.data
+                        : [];
+            totalCount = Number.isFinite(Number(res.data?.totalCount)) ? Number(res.data.totalCount) : null;
+            allCoupons.push(...page.map((coupon) => this.normalizeCoupon(coupon, location)));
+
+            if (page.length < pageSize) break;
+            offset += pageSize;
+        } while (totalCount == null || offset < totalCount);
+
+        return {
+            location: {
+                name: location.name,
+                locationId: location.locationId
+            },
+            coupons: allCoupons,
+            totalCount: totalCount ?? allCoupons.length
+        };
+    }
+
+    async listCouponsAcrossLocations(options = {}) {
+        const locations = this.getConfiguredLocations();
+        if (locations.length === 0) {
+            return { coupons: [], locations: [], errors: [] };
+        }
+
+        const results = await Promise.allSettled(
+            locations.map((location) => this.listCouponsForLocation(location, options))
+        );
+        const coupons = [];
+        const errors = [];
+
+        results.forEach((result, index) => {
+            const location = locations[index];
+            if (result.status === 'fulfilled') {
+                coupons.push(...result.value.coupons);
+            } else {
+                errors.push({
+                    locationName: location.name,
+                    locationId: location.locationId,
+                    error: result.reason?.response?.data?.message
+                        || result.reason?.response?.data?.error
+                        || result.reason?.message
+                        || 'Failed to fetch GHL coupons'
+                });
+            }
+        });
+
+        coupons.sort((a, b) => {
+            const locationCompare = String(a.locationName).localeCompare(String(b.locationName));
+            if (locationCompare !== 0) return locationCompare;
+            return String(a.code || a.name).localeCompare(String(b.code || b.name));
+        });
+
+        return {
+            coupons,
+            locations: locations.map(({ name, locationId }) => ({ name, locationId })),
+            errors
+        };
+    }
+
+    buildCouponPayload(coupon, locationId) {
+        const payload = {
+            altId: locationId,
+            altType: 'location',
+            name: coupon.name || coupon.code,
+            code: coupon.code,
+            discountType: 'percentage',
+            discountValue: Number((Number(coupon.discountPercent || 0) * 100).toFixed(4)),
+            startDate: new Date().toISOString(),
+            usageLimit: coupon.maxRedemptions || undefined,
+            endDate: coupon.expiresAt || undefined,
+            applyToFuturePayments: true,
+            applyToFuturePaymentsConfig: { type: 'forever' },
+            limitPerCustomer: true
+        };
+
+        Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+        return payload;
+    }
+
+    async createCouponForLocation(location, coupon) {
+        const client = this.createClient({
+            privateKey: location.privateKey,
+            locationId: location.locationId,
+            version: 'v3'
+        });
+        const payload = this.buildCouponPayload(coupon, location.locationId);
+        const res = await client.post('/payments/coupon', payload);
+        return this.normalizeCoupon(res.data || payload, location);
+    }
+
+    async syncCouponsToGhlLocations(coupons = []) {
+        const locations = this.getConfiguredLocations();
+        const results = [];
+        const activeCoupons = coupons.filter((coupon) => coupon.active);
+        const inactiveCoupons = coupons.filter((coupon) => !coupon.active);
+
+        if (locations.length === 0) {
+            return {
+                summary: {
+                    locations: 0,
+                    localCoupons: coupons.length,
+                    activeCoupons: activeCoupons.length,
+                    created: 0,
+                    skippedExisting: 0,
+                    skippedInactive: inactiveCoupons.length,
+                    errors: coupons.length
+                },
+                results: coupons.map((coupon) => ({
+                    code: coupon.code,
+                    action: 'error',
+                    error: 'No GHL locations are configured'
+                }))
+            };
+        }
+
+        for (const location of locations) {
+            let existingCodes = new Set();
+            try {
+                const existing = await this.listCouponsForLocation(location);
+                existingCodes = new Set(existing.coupons.map((coupon) => String(coupon.code || '').toUpperCase()).filter(Boolean));
+            } catch (err) {
+                const error = err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to list GHL coupons';
+                for (const coupon of activeCoupons) {
+                    results.push({
+                        locationName: location.name,
+                        locationId: location.locationId,
+                        code: coupon.code,
+                        action: 'error',
+                        error
+                    });
+                }
+                continue;
+            }
+
+            for (const coupon of activeCoupons) {
+                if (existingCodes.has(String(coupon.code).toUpperCase())) {
+                    results.push({
+                        locationName: location.name,
+                        locationId: location.locationId,
+                        code: coupon.code,
+                        action: 'skipped_existing'
+                    });
+                    continue;
+                }
+
+                try {
+                    const created = await this.createCouponForLocation(location, {
+                        ...coupon,
+                        name: coupon.notes || coupon.code
+                    });
+                    results.push({
+                        locationName: location.name,
+                        locationId: location.locationId,
+                        code: coupon.code,
+                        action: 'created',
+                        ghlCouponId: created.id || null
+                    });
+                    existingCodes.add(String(coupon.code).toUpperCase());
+                } catch (err) {
+                    results.push({
+                        locationName: location.name,
+                        locationId: location.locationId,
+                        code: coupon.code,
+                        action: 'error',
+                        error: err.response?.data?.message
+                            || err.response?.data?.error
+                            || err.message
+                            || 'Failed to create GHL coupon'
+                    });
+                }
+            }
+        }
+
+        for (const coupon of inactiveCoupons) {
+            results.push({
+                code: coupon.code,
+                action: 'skipped_inactive'
+            });
+        }
+
+        return {
+            summary: {
+                locations: locations.length,
+                localCoupons: coupons.length,
+                activeCoupons: activeCoupons.length,
+                created: results.filter((result) => result.action === 'created').length,
+                skippedExisting: results.filter((result) => result.action === 'skipped_existing').length,
+                skippedInactive: inactiveCoupons.length,
+                errors: results.filter((result) => result.action === 'error').length
+            },
+            results
+        };
+    }
+
     async createCoupon({ name, code, discountPercent, maxRedemptions, productIds = [], expiresAt }) {
         if (!this.isConfigured()) {
             throw new Error('GHL_PRIVATE_KEY and GHL_LOCATION_ID are required to create a GHL coupon');

@@ -33,6 +33,44 @@ type Redemption = {
   createdAt: string;
 };
 
+type GhlCoupon = {
+  id: string;
+  code: string;
+  name: string;
+  status: string;
+  discountType: string;
+  discountValue: number | null;
+  usageLimit: number | null;
+  redemptionCount: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  createdAt: string | null;
+  locationName: string;
+  locationId: string;
+  affiliate: {
+    id: string;
+    name: string;
+    email: string;
+    status: string;
+  } | null;
+};
+
+type GhlCouponError = {
+  locationName: string;
+  locationId: string;
+  error: string;
+};
+
+type GhlSyncSummary = {
+  locations: number;
+  localCoupons: number;
+  activeCoupons: number;
+  created: number;
+  skippedExisting: number;
+  skippedInactive: number;
+  errors: number;
+};
+
 const emptyForm = {
   code: "",
   discountPercent: "",
@@ -65,6 +103,13 @@ export default function CouponsPage() {
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
   const [selectedRedemptionIds, setSelectedRedemptionIds] = useState<Set<string>>(new Set());
+  const [ghlCoupons, setGhlCoupons] = useState<GhlCoupon[]>([]);
+  const [ghlErrors, setGhlErrors] = useState<GhlCouponError[]>([]);
+  const [ghlStatusFilter, setGhlStatusFilter] = useState("");
+  const [ghlSearch, setGhlSearch] = useState("");
+  const [loadingGhlCoupons, setLoadingGhlCoupons] = useState(false);
+  const [syncingGhlCoupons, setSyncingGhlCoupons] = useState(false);
+  const [ghlSyncSummary, setGhlSyncSummary] = useState<GhlSyncSummary | null>(null);
 
   const loadCoupons = useCallback(async (key: string) => {
     const data = await apiFetch<{ coupons: Coupon[] }>("/api/admin/coupons", key);
@@ -82,6 +127,18 @@ export default function CouponsPage() {
     setRedemptions(data.redemptions || []);
   }, []);
 
+  const loadGhlCoupons = useCallback(async (key: string, status: string, searchTerm: string) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (searchTerm.trim()) params.set("search", searchTerm.trim());
+    const data = await apiFetch<{ coupons: GhlCoupon[]; errors: GhlCouponError[] }>(
+      `/api/admin/coupons/ghl${params.toString() ? `?${params}` : ""}`,
+      key
+    );
+    setGhlCoupons(data.coupons || []);
+    setGhlErrors(data.errors || []);
+  }, []);
+
   useEffect(() => {
     if (!ready) return;
     const key = requireAuth();
@@ -89,6 +146,10 @@ export default function CouponsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
     loadCoupons(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
     loadRedemptions(key, null, "").catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    setLoadingGhlCoupons(true);
+    loadGhlCoupons(key, "", "")
+      .catch((e) => { if (!handleAuthError(e)) toast(e.message); })
+      .finally(() => setLoadingGhlCoupons(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load fns intentionally not deps to avoid refetch loops
   }, [ready]);
 
@@ -113,6 +174,7 @@ export default function CouponsPage() {
     try {
       await loadCoupons(key);
       await loadRedemptions(key, selectedCode, statusFilter);
+      await loadGhlCoupons(key, ghlStatusFilter, ghlSearch);
       toast("Refreshed.");
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
@@ -176,6 +238,37 @@ export default function CouponsPage() {
     }
   }
 
+  async function handleLoadGhlCoupons() {
+    const key = requireAuth();
+    if (!key) return;
+    setLoadingGhlCoupons(true);
+    try {
+      await loadGhlCoupons(key, ghlStatusFilter, ghlSearch);
+      toast("Loaded GHL coupons.");
+    } catch (e) {
+      if (!handleAuthError(e)) toast((e as Error).message);
+    } finally {
+      setLoadingGhlCoupons(false);
+    }
+  }
+
+  async function handleSyncGhlCoupons() {
+    if (!confirm("Sync every active local coupon code to every configured GHL location? Existing GHL codes will be skipped.")) return;
+    const key = requireAuth();
+    if (!key) return;
+    setSyncingGhlCoupons(true);
+    try {
+      const data = await apiFetch<{ summary: GhlSyncSummary }>("/api/admin/coupons/ghl/sync", key, { method: "POST" });
+      setGhlSyncSummary(data.summary);
+      await loadGhlCoupons(key, ghlStatusFilter, ghlSearch);
+      toast(`GHL sync complete: ${data.summary.created} created, ${data.summary.skippedExisting} already existed.`);
+    } catch (e) {
+      if (!handleAuthError(e)) toast((e as Error).message);
+    } finally {
+      setSyncingGhlCoupons(false);
+    }
+  }
+
   async function handleMarkPaid() {
     if (selectedRedemptionIds.size === 0) return toast("Select at least one redemption.");
     if (!confirm(`Mark ${selectedRedemptionIds.size} redemption(s) as paid?`)) return;
@@ -209,6 +302,8 @@ export default function CouponsPage() {
     return c.code.toLowerCase().includes(q) || c.affiliateEmail.toLowerCase().includes(q);
   });
 
+  const affiliateLinkedCount = ghlCoupons.filter((c) => c.affiliate).length;
+
   return (
     <div className="flex flex-1 flex-col">
       <AdminTopbar
@@ -218,7 +313,7 @@ export default function CouponsPage() {
         onRefresh={handleRefresh}
         onLogout={logout}
       />
-      <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 py-5 lg:grid-cols-[1fr_1.2fr]">
+      <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 pb-28 pt-5 lg:grid-cols-[1fr_1.2fr]">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Coupons</h2>
@@ -229,7 +324,7 @@ export default function CouponsPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-              <button onClick={() => fillForm(null)} className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-500 px-3 py-2 text-sm font-extrabold text-slate-950">
+              <button onClick={() => fillForm(null)} className="rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm font-extrabold text-slate-950">
                 New Coupon
               </button>
             </div>
@@ -318,7 +413,7 @@ export default function CouponsPage() {
               </Field>
             </div>
             <div className="col-span-full flex justify-end">
-              <button type="submit" className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-500 px-4 py-2.5 text-sm font-extrabold text-slate-950">
+              <button type="submit" className="rounded-lg bg-blue-400 hover:bg-blue-300 px-4 py-2.5 text-sm font-extrabold text-slate-950">
                 Save Coupon
               </button>
             </div>
@@ -338,12 +433,12 @@ export default function CouponsPage() {
               <button onClick={handleLoadRedemptions} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold">
                 Load
               </button>
-              <button onClick={handleMarkPaid} className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-500 px-3 py-2 text-sm font-extrabold text-slate-950">
+              <button onClick={handleMarkPaid} className="rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm font-extrabold text-slate-950">
                 Mark Selected Paid
               </button>
             </div>
           </div>
-          <div className="overflow-x-auto px-3.5 pb-4">
+          <div className="overflow-x-auto px-3.5 pb-8">
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-wide text-slate-400">
@@ -390,6 +485,114 @@ export default function CouponsPage() {
             </table>
           </div>
         </section>
+
+        <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl lg:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">GHL Coupons</h2>
+              <div className="mt-1 text-xs text-slate-400">
+                {ghlCoupons.length} codes fetched · {affiliateLinkedCount} matched to affiliates
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <input
+                className="input w-52"
+                placeholder="Search GHL coupons…"
+                value={ghlSearch}
+                onChange={(e) => setGhlSearch(e.target.value)}
+              />
+              <select className="input w-36" value={ghlStatusFilter} onChange={(e) => setGhlStatusFilter(e.target.value)}>
+                <option value="">All statuses</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="active">Active</option>
+                <option value="expired">Expired</option>
+              </select>
+              <button onClick={handleLoadGhlCoupons} disabled={loadingGhlCoupons} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold disabled:opacity-60">
+                {loadingGhlCoupons ? "Loading…" : "Fetch GHL"}
+              </button>
+              <button onClick={handleSyncGhlCoupons} disabled={syncingGhlCoupons} className="rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm font-extrabold text-slate-950 disabled:opacity-60">
+                {syncingGhlCoupons ? "Syncing…" : "Sync Local to GHL"}
+              </button>
+            </div>
+          </div>
+
+          {ghlSyncSummary && (
+            <div className="m-3.5 grid gap-2 rounded-xl border border-blue-300/20 bg-blue-300/10 p-3 text-xs text-blue-100 sm:grid-cols-6">
+              <Metric label="Locations" value={ghlSyncSummary.locations} />
+              <Metric label="Local" value={ghlSyncSummary.localCoupons} />
+              <Metric label="Active" value={ghlSyncSummary.activeCoupons} />
+              <Metric label="Created" value={ghlSyncSummary.created} />
+              <Metric label="Existing" value={ghlSyncSummary.skippedExisting} />
+              <Metric label="Errors" value={ghlSyncSummary.errors} />
+            </div>
+          )}
+
+          {ghlErrors.length > 0 && (
+            <div className="m-3.5 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-xs text-amber-100">
+              {ghlErrors.map((err) => (
+                <div key={err.locationId}>
+                  {err.locationName}: {err.error}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="overflow-x-auto px-3.5 pb-8">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wide text-slate-400">
+                  <th className="p-2">Code</th>
+                  <th className="p-2">Location</th>
+                  <th className="p-2">Affiliate</th>
+                  <th className="p-2">Discount</th>
+                  <th className="p-2">Usage</th>
+                  <th className="p-2">Status</th>
+                  <th className="p-2">Ends</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ghlCoupons.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="p-2 text-slate-400">
+                      {loadingGhlCoupons ? "Loading GHL coupons…" : "No GHL coupons loaded."}
+                    </td>
+                  </tr>
+                )}
+                {ghlCoupons.map((coupon, index) => (
+                  <tr key={`${coupon.locationId}-${coupon.id || coupon.code || index}`} className="border-t border-white/10 hover:bg-white/[.03]">
+                    <td className="p-2 font-mono text-blue-200">{coupon.code || "—"}</td>
+                    <td className="p-2">
+                      {coupon.locationName}
+                      <br />
+                      <span className="font-mono text-[10px] text-slate-500">{coupon.locationId}</span>
+                    </td>
+                    <td className="p-2">
+                      {coupon.affiliate ? (
+                        <>
+                          {coupon.affiliate.name || coupon.affiliate.email}
+                          <br />
+                          <span className="text-slate-400">{coupon.affiliate.email} · {coupon.affiliate.status}</span>
+                        </>
+                      ) : (
+                        <span className="text-slate-500">Not linked</span>
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {coupon.discountValue != null ? coupon.discountValue : "—"}
+                      {coupon.discountType ? ` ${coupon.discountType}` : ""}
+                    </td>
+                    <td className="p-2">
+                      {coupon.redemptionCount ?? 0}
+                      {coupon.usageLimit != null ? ` / ${coupon.usageLimit}` : ""}
+                    </td>
+                    <td className="p-2">{coupon.status || "—"}</td>
+                    <td className="p-2">{coupon.endDate ? new Date(coupon.endDate).toLocaleDateString() : "No expiry"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </main>
       <Toast message={message} />
     </div>
@@ -403,5 +606,14 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {children}
       {hint && <span className="mt-1.5 block text-[11px] text-slate-400">{hint}</span>}
     </label>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-blue-200/70">{label}</div>
+      <div className="mt-0.5 text-base font-extrabold text-white">{value}</div>
+    </div>
   );
 }

@@ -146,3 +146,20 @@ CREATE TABLE IF NOT EXISTS ghl_invoice_schedules (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (location_id, contact_id, product_id)
 );
+
+-- Admin-created, named custom links attributing traffic/sales to one affiliate via
+-- their coupon code. Link = destination_url + ?ref=<coupon_code>&campaign=<slug>,
+-- computed on read (see utils/campaignStore.js) rather than stored, so it always
+-- reflects the current destination_url.
+CREATE TABLE IF NOT EXISTS campaigns (
+    id                      TEXT PRIMARY KEY,
+    name                    TEXT NOT NULL,
+    slug                    TEXT NOT NULL UNIQUE,
+    coupon_code             TEXT NOT NULL REFERENCES coupons(code),
+    destination_url         TEXT NOT NULL,
+    notes                   TEXT,
+    active                  BOOLEAN NOT NULL DEFAULT true,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_coupon_code ON campaigns(coupon_code);

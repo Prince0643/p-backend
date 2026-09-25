@@ -1,5 +1,6 @@
 const affiliateStore = require('../utils/affiliateStore');
 const couponStore = require('../utils/couponStore');
+const campaignStore = require('../utils/campaignStore');
 const { issueToken } = require('../utils/authToken');
 
 // POST /api/affiliates/login (public)
@@ -40,6 +41,19 @@ exports.me = async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to load dashboard' });
+    }
+};
+
+// GET /api/affiliates/me/campaigns (requires auth) - read-only list of the logged-in
+// affiliate's own active campaigns, so they can copy/share their links.
+exports.myCampaigns = async (req, res) => {
+    try {
+        const affiliate = req.affiliate;
+        if (!affiliate.couponCode) return res.json({ success: true, campaigns: [] });
+        const campaigns = await campaignStore.listCampaigns({ couponCode: affiliate.couponCode, active: true });
+        res.json({ success: true, campaigns });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to load campaigns' });
     }
 };
 

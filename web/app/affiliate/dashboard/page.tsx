@@ -51,6 +51,15 @@ type Redemption = {
 
 type Stats = { totalRedemptions: number; paidRedemptions: number; totalEarnings: number };
 
+type Campaign = {
+  id: string;
+  name: string;
+  slug: string;
+  destinationUrl: string;
+  link: string;
+  notes: string;
+};
+
 function statusPill(status: string) {
   if (status === "active" || status === "paid") return "border-emerald-400/40 text-emerald-200";
   if (status === "pending") return "border-amber-400/40 text-amber-200";
@@ -66,6 +75,8 @@ export default function AffiliateDashboardPage() {
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [copied, setCopied] = useState(false);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [copiedCampaignId, setCopiedCampaignId] = useState<string | null>(null);
 
   const [editingPayout, setEditingPayout] = useState(false);
   const [region, setRegion] = useState<"PH" | "GLOBAL">("PH");
@@ -87,14 +98,30 @@ export default function AffiliateDashboardPage() {
     setGlobalMethod(data.affiliate.paymentRegion === "GLOBAL" ? data.affiliate.preferredBank : "");
   }, []);
 
+  const loadCampaigns = useCallback(async (token: string) => {
+    const data = await apiFetch<{ campaigns: Campaign[] }>("/api/affiliates/me/campaigns", token);
+    setCampaigns(data.campaigns || []);
+  }, []);
+
   useEffect(() => {
     if (!ready) return;
     const token = requireAuth();
     if (!token) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
     load(token).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    loadCampaigns(token).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load intentionally not deps to avoid refetch loops
   }, [ready]);
+
+  async function copyCampaignLink(c: Campaign) {
+    try {
+      await navigator.clipboard.writeText(c.link);
+      setCopiedCampaignId(c.id);
+      setTimeout(() => setCopiedCampaignId(null), 2000);
+    } catch {
+      toast("Could not copy - select and copy the link manually.");
+    }
+  }
 
   async function copyCoupon() {
     if (!affiliate) return;
@@ -208,6 +235,35 @@ export default function AffiliateDashboardPage() {
             {(coupon.discountPercent * 100).toFixed(0)}% customer discount · {(coupon.affiliateFeePercent * 100).toFixed(0)}%
             commission for you{coupon.maxRedemptions ? ` · one-time use` : ""}
           </p>
+        )}
+      </section>
+
+      <section className="mb-6 rounded-2xl border border-white/10 bg-white/[.03] p-5 shadow-2xl">
+        <h2 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-400">Your Campaign Links</h2>
+        {campaigns.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            No active campaigns yet. Your admin can create named links for you to share.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {campaigns.map((c) => (
+              <div key={c.id} className="rounded-xl border border-white/10 bg-[#0a122480] p-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="font-bold">{c.name}</div>
+                    {c.notes && <div className="mt-0.5 text-xs text-slate-400">{c.notes}</div>}
+                  </div>
+                  <button
+                    onClick={() => copyCampaignLink(c)}
+                    className="rounded-lg border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-bold hover:bg-white/20"
+                  >
+                    {copiedCampaignId === c.id ? "Copied!" : "Copy Link"}
+                  </button>
+                </div>
+                <div className="mt-2 break-all font-mono text-xs text-cyan-200">{c.link}</div>
+              </div>
+            ))}
+          </div>
         )}
       </section>
 

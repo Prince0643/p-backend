@@ -11,6 +11,7 @@ const paymentRoutes = require('./routes/payments');
 const clockistryRoutes = require('./routes/clockistry');
 const adminProductRoutes = require('./routes/adminProducts');
 const adminCouponRoutes = require('./routes/adminCoupons');
+const adminCampaignRoutes = require('./routes/adminCampaigns');
 const affiliateRoutes = require('./routes/affiliates');
 const adminAffiliateRoutes = require('./routes/adminAffiliates');
 const adminSolutionsRoutes = require('./routes/adminSolutions');
@@ -70,6 +71,7 @@ app.use('/api/clockistry', clockistryRoutes);
 app.use('/api/admin', adminAuthRoutes);
 app.use('/api/admin', adminProductRoutes);
 app.use('/api/admin', adminCouponRoutes);
+app.use('/api/admin', adminCampaignRoutes);
 app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/admin', adminAffiliateRoutes);
 app.use('/api/admin', adminSolutionsRoutes);
@@ -94,6 +96,7 @@ if (hasExportedWebApp) {
         '/admin/admins',
         '/admin/products',
         '/admin/coupons',
+        '/admin/campaigns',
         '/admin/affiliates',
         '/admin/solutions',
         '/affiliate/login',

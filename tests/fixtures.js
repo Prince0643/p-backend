@@ -5,7 +5,7 @@ const couponStore = require('../utils/couponStore');
 
 const COUPON_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
-/** 6-char random code (matches the production 6-character coupon code limit). */
+/** 6-char random code, well under the production coupon code length cap (50 chars). */
 function testCouponCode() {
     let code = '';
     for (let i = 0; i < 6; i++) {

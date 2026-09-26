@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 const app = require('../index');
 const pool = require('../db/pool');
+const couponStore = require('../utils/couponStore');
 const { createTestCoupon, cleanupCoupon } = require('./fixtures');
 
 const PRODUCT_ID = 'test_product';
@@ -111,6 +112,28 @@ test(
         }
     }
 );
+
+test('a coupon code longer than 6 characters (but within the 50-char cap) can be created', async () => {
+    const code = 'FATHERSDAY15';
+    await cleanupCoupon(code);
+    try {
+        const created = await createTestCoupon({ code });
+        assert.equal(created, code);
+        const found = await couponStore.findCoupon(code);
+        assert.ok(found, 'coupon should be findable after creation');
+        assert.equal(found.code, code);
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('a coupon code over 50 characters is rejected', async () => {
+    const code = 'A'.repeat(51);
+    await assert.rejects(
+        () => createTestCoupon({ code }),
+        /must be at most 50 characters/i
+    );
+});
 
 after(async () => {
     await pool.end();

@@ -373,8 +373,8 @@ export default function CouponsPage() {
           </div>
 
           <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
-            <Field label="Code" hint="Uppercased automatically. New codes are limited to 6 characters.">
-              <input className="input uppercase" required maxLength={6} value={form.code}
+            <Field label="Code" hint="Uppercased automatically. Letters, numbers, - and _ only, up to 50 characters.">
+              <input className="input uppercase" required maxLength={50} value={form.code}
                 onChange={(e) => setForm({ ...form, code: e.target.value })} />
             </Field>
             <Field label="Discount %">

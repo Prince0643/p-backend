@@ -120,6 +120,7 @@ if (hasExportedWebApp) {
         '/admin/products',
         '/admin/coupons',
         '/admin/campaigns',
+        '/admin/campaign-sites',
         '/admin/affiliates',
         '/admin/solutions',
         '/affiliate/login',

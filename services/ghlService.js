@@ -326,12 +326,34 @@ class GhlService {
         };
     }
 
+    /**
+     * GHL rejects coupon names over 100 chars ("name must be shorter than or equal
+     * to 100 characters"). Collapses internal whitespace and truncates, appending an
+     * ellipsis within the 100-char budget so truncation is visible in the GHL UI.
+     */
+    truncateCouponName(value) {
+        const collapsed = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+        if (collapsed.length <= 100) return collapsed;
+        return `${collapsed.slice(0, 99)}…`;
+    }
+
+    /**
+     * Resolves the GHL coupon `name` field from the first non-empty candidate (in
+     * priority order), then clamps it to GHL's 100-char limit. Shared by create and
+     * update payload builders so every code path that names a GHL coupon is clamped
+     * the same way.
+     */
+    resolveCouponName(...candidates) {
+        const first = candidates.find((c) => typeof c === 'string' && c.trim().length > 0);
+        return this.truncateCouponName(first || '');
+    }
+
     /** Payload for POST /payments/coupon (create). */
     buildCouponPayload(coupon, locationId) {
         const payload = {
             altId: locationId,
             altType: 'location',
-            name: coupon.name || coupon.code,
+            name: this.resolveCouponName(coupon.name, coupon.notes, coupon.code),
             code: coupon.code,
             discountType: 'percentage',
             discountValue: Number((Number(coupon.discountPercent || 0) * 100).toFixed(4)),
@@ -360,7 +382,7 @@ class GhlService {
             id: existingGhlCoupon.id,
             altId: locationId,
             altType: 'location',
-            name: coupon.name || existingGhlCoupon.name || coupon.code,
+            name: this.resolveCouponName(coupon.name, existingGhlCoupon.name, coupon.code),
             code: coupon.code,
             discountType: 'percentage',
             discountValue: Number((Number(coupon.discountPercent || 0) * 100).toFixed(4)),
@@ -510,7 +532,7 @@ class GhlService {
                         continue;
                     }
                     try {
-                        const created = await this.createCouponForLocation(location, { ...coupon, name: coupon.notes || coupon.code });
+                        const created = await this.createCouponForLocation(location, coupon);
                         results.push({ locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'created', ghlCouponId: created.id || null });
                         existingMap.set(String(coupon.code).toUpperCase(), created);
                     } catch (err) {
@@ -574,7 +596,7 @@ class GhlService {
         const payload = {
             altId: this.locationId,
             altType: 'location',
-            name: name || code,
+            name: this.resolveCouponName(name, null, code),
             code,
             discountType: 'percentage',
             discountValue: Number((Number(discountPercent || 0) * 100).toFixed(4)),

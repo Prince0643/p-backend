@@ -320,3 +320,68 @@ test('normalizeCoupon leaves discountValue/usageLimit as null when GHL omits the
     assert.equal(normalized.discountValue, null);
     assert.equal(normalized.usageLimit, null);
 });
+
+test('truncateCouponName collapses whitespace and leaves short names unchanged', () => {
+    assert.equal(ghlService.truncateCouponName('  Short   Name  '), 'Short Name');
+    assert.equal(ghlService.truncateCouponName(''), '');
+});
+
+test('truncateCouponName truncates names over 100 chars and ends with an ellipsis within the limit', () => {
+    const long = 'A'.repeat(150);
+    const truncated = ghlService.truncateCouponName(long);
+    assert.equal(truncated.length, 100);
+    assert.ok(truncated.endsWith('…'));
+    assert.equal(truncated, `${'A'.repeat(99)}…`);
+});
+
+test('buildCouponPayload derives name from PRINC3-style long notes (regression: GHL "name must be <= 100 chars")', () => {
+    const longNotes = 'Auto-generated for affiliate '.padEnd(140, 'x');
+    const payload = ghlService.buildCouponPayload(
+        { code: 'PRINC3', notes: longNotes, discountPercent: 0.1, maxRedemptions: null, expiresAt: null },
+        'loc_1'
+    );
+    assert.ok(payload.name.length <= 100, `expected name <= 100 chars, got ${payload.name.length}`);
+    assert.ok(payload.name.endsWith('…'));
+});
+
+test('buildCouponPayload keeps short notes unchanged and prefers an explicit name over notes', () => {
+    const shortNotesPayload = ghlService.buildCouponPayload(
+        { code: 'SHORTNOTE', notes: 'Short note', discountPercent: 0.1, maxRedemptions: null, expiresAt: null },
+        'loc_1'
+    );
+    assert.equal(shortNotesPayload.name, 'Short note');
+
+    const explicitNamePayload = ghlService.buildCouponPayload(
+        { code: 'HASNAME', name: 'Explicit Name', notes: 'Some notes that would otherwise be used', discountPercent: 0.1, maxRedemptions: null, expiresAt: null },
+        'loc_1'
+    );
+    assert.equal(explicitNamePayload.name, 'Explicit Name');
+});
+
+test('buildCouponPayload falls back to the coupon code when notes are empty', () => {
+    const payload = ghlService.buildCouponPayload(
+        { code: 'NONOTES', notes: '', discountPercent: 0.1, maxRedemptions: null, expiresAt: null },
+        'loc_1'
+    );
+    assert.equal(payload.name, 'NONOTES');
+});
+
+test('buildCouponUpdatePayload keeps carrying over the existing GHL coupon name, clamped to 100 chars', () => {
+    const existingLongName = 'B'.repeat(150);
+    const payload = ghlService.buildCouponUpdatePayload(
+        { id: 'ghl_1', name: existingLongName },
+        { code: 'UPDATEME', discountPercent: 0.1, maxRedemptions: null, expiresAt: null },
+        'loc_1'
+    );
+    assert.equal(payload.name.length, 100);
+    assert.ok(payload.name.endsWith('…'));
+});
+
+test('buildCouponUpdatePayload does not rename an existing coupon when our local record has no explicit name', () => {
+    const payload = ghlService.buildCouponUpdatePayload(
+        { id: 'ghl_1', name: 'Existing GHL Name' },
+        { code: 'UPDATEME', notes: 'Local notes that must not overwrite the existing GHL name', discountPercent: 0.1, maxRedemptions: null, expiresAt: null },
+        'loc_1'
+    );
+    assert.equal(payload.name, 'Existing GHL Name');
+});

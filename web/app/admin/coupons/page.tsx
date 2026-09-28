@@ -314,8 +314,8 @@ export default function CouponsPage() {
         onLogout={logout}
       />
       <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 pb-28 pt-5 lg:grid-cols-[1fr_1.2fr]">
-        <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
-          <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
+        <section className="flex flex-col rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Coupons</h2>
             <div className="flex gap-2">
               <input
@@ -329,7 +329,7 @@ export default function CouponsPage() {
               </button>
             </div>
           </div>
-          <div className="flex max-h-[50vh] flex-col gap-2.5 overflow-y-auto p-2.5">
+          <div className="flex max-h-[50vh] flex-col gap-2.5 overflow-y-auto p-2.5 lg:h-0 lg:max-h-none lg:min-h-0 lg:flex-1">
             {filtered.length === 0 && (
               <div className="rounded-xl border border-white/10 bg-[#0c162c8c] p-3">
                 <div className="font-extrabold">No coupons</div>

@@ -44,26 +44,33 @@ function extractItemProductIds(detail) {
 
 /**
  * Finds the single active GLOBAL campaign (if any) whose site sells one of the order's
- * item products, for this coupon code. Zero or multiple matches -> null (affiliate is
- * still credited, just without campaign attribution).
+ * item products. One campaign now applies to every affiliate (no per-campaign coupon
+ * filter), so a match here credits the campaign for ANY affiliate-type coupon. Zero or
+ * multiple matches -> null (the affiliate is still credited, just without campaign
+ * attribution).
  */
-async function findCampaignMatch(code, itemProductIds) {
+async function findCampaignMatch(itemProductIds) {
     if (!Array.isArray(itemProductIds) || itemProductIds.length === 0) return null;
     const { rows } = await pool.query(
         `SELECT DISTINCT c.id
          FROM campaigns c
          JOIN campaign_sites s ON s.id = c.site_id AND s.active = true AND s.channel = 'global'
-         JOIN campaign_site_products csp ON csp.site_id = s.id AND csp.kind = 'ghl' AND csp.ref = ANY($2::text[])
-         WHERE c.coupon_code = $1 AND c.active = true`,
-        [code, itemProductIds]
+         JOIN campaign_site_products csp ON csp.site_id = s.id AND csp.kind = 'ghl' AND csp.ref = ANY($1::text[])
+         WHERE c.active = true`,
+        [itemProductIds]
     );
     return rows.length === 1 ? rows[0].id : null;
 }
 
-/** Looks up the coupon + any linked affiliate for a code. Returns null if the coupon doesn't exist or has no affiliate. */
+/**
+ * Looks up the coupon + any linked affiliate for a code. Returns null if the coupon
+ * doesn't exist, isn't an affiliate-type coupon (general coupons earn no affiliate
+ * credit, even via a Global order), or has no linked affiliate.
+ */
 async function resolveAffiliateCoupon(code) {
     const coupon = await couponStore.findCoupon(code);
     if (!coupon) return null;
+    if (coupon.type !== 'affiliate') return null;
 
     if (coupon.affiliateEmail) return { coupon, affiliateEmail: coupon.affiliateEmail };
 
@@ -84,7 +91,9 @@ async function processPaidOrder(client, order, summary, { coupon, affiliateEmail
     }
 
     const itemProductIds = extractItemProductIds(detail);
-    const campaignId = await findCampaignMatch(order.couponCode, itemProductIds);
+    // Only reached for affiliate-type coupons (see resolveAffiliateCoupon) - general
+    // coupons never attribute a campaign.
+    const campaignId = await findCampaignMatch(itemProductIds);
 
     const contact = detail?.contactSnapshot || {};
     const email = contact.email || order.contactEmail || '';

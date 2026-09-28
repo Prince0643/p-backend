@@ -32,11 +32,14 @@ function basePayload(overrides = {}) {
     };
 }
 
-async function createTestCampaign({ couponCode, active = true, name = 'Attribution Campaign' } = {}) {
+// couponCode no longer required/accepted by the campaign endpoint - campaigns apply to
+// every affiliate automatically now. Kept as a no-op param on a couple of call sites
+// below purely for readability (documents "the coupon this test will use").
+async function createTestCampaign({ active = true, name = 'Attribution Campaign' } = {}) {
     const res = await request(app)
         .post('/api/admin/campaigns')
         .set('x-api-key', ADMIN_KEY)
-        .send({ name, couponCode, destinationUrl: ALLOWED_URL, active, siteId: SITE.id });
+        .send({ name, destinationUrl: ALLOWED_URL, active, siteId: SITE.id });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     return res.body.campaign;
 }
@@ -52,7 +55,9 @@ test(
     'empty promoCode with a valid attributionRef applies the coupon and attributes the campaign',
     { skip: hasPaymongoKey ? false : 'requires PAYMONGO_SECRET_KEY to create a real test-mode payment intent' },
     async () => {
-        const code = await createTestCoupon({ discountPercent: 0.15 });
+        // Campaign attribution now requires an AFFILIATE-type coupon (campaigns apply to
+        // every affiliate automatically, rather than being tied to one specific coupon).
+        const code = await createTestCoupon({ type: 'affiliate', discountPercent: 0.15 });
         let campaignId;
         try {
             const campaign = await createTestCampaign({ couponCode: code });
@@ -79,17 +84,17 @@ test(
     }
 );
 
-// ---- (b) typed promoCode different from ref wins; campaign not attributed ----
+// ---- (b) typed promoCode different from ref wins; a GENERAL coupon never attributes a campaign ----
 
 test(
-    'a typed promoCode overrides attributionRef, and campaign is not attributed when the coupons differ',
+    'a typed promoCode overrides attributionRef, and a GENERAL coupon does not attribute the campaign',
     { skip: hasPaymongoKey ? false : 'requires PAYMONGO_SECRET_KEY to create a real test-mode payment intent' },
     async () => {
-        const typedCode = await createTestCoupon({ discountPercent: 0.10 });
-        const refCode = await createTestCoupon({ discountPercent: 0.20 });
+        const typedCode = await createTestCoupon({ type: 'general', discountPercent: 0.10 });
+        const refCode = await createTestCoupon({ type: 'affiliate', discountPercent: 0.20 });
         let campaignId;
         try {
-            const campaign = await createTestCampaign({ couponCode: refCode });
+            const campaign = await createTestCampaign();
             campaignId = campaign.id;
 
             const res = await request(app)
@@ -104,7 +109,7 @@ test(
             );
             assert.equal(rows.length, 1);
             assert.equal(rows[0].code, typedCode);
-            assert.equal(rows[0].campaign_id, null);
+            assert.equal(rows[0].campaign_id, null, 'a general coupon must never earn campaign attribution');
         } finally {
             await cleanupCampaign(campaignId);
             await cleanupCoupon(typedCode);
@@ -151,17 +156,16 @@ test(
     }
 );
 
-// ---- (d) campaign slug whose coupon doesn't match applied coupon -> campaign_id NULL ----
+// ---- (d) a GENERAL coupon applied via an affiliate link earns no campaign credit, even with a valid active slug ----
 
 test(
-    'a campaign slug whose coupon does not match the applied coupon is not attributed',
+    'a GENERAL coupon does not attribute a campaign even when the slug is valid and active',
     { skip: hasPaymongoKey ? false : 'requires PAYMONGO_SECRET_KEY to create a real test-mode payment intent' },
     async () => {
-        const appliedCode = await createTestCoupon({ discountPercent: 0.10 });
-        const otherCode = await createTestCoupon({ discountPercent: 0.10 });
+        const appliedCode = await createTestCoupon({ type: 'general', discountPercent: 0.10 });
         let campaignId;
         try {
-            const campaign = await createTestCampaign({ couponCode: otherCode });
+            const campaign = await createTestCampaign();
             campaignId = campaign.id;
 
             const res = await request(app)
@@ -178,21 +182,20 @@ test(
         } finally {
             await cleanupCampaign(campaignId);
             await cleanupCoupon(appliedCode);
-            await cleanupCoupon(otherCode);
         }
     }
 );
 
-// ---- (e) campaign slug exists but inactive -> not attributed even though coupon matches ----
+// ---- (e) campaign slug exists but inactive -> not attributed even with an affiliate coupon applied ----
 
 test(
-    'an inactive campaign is not attributed even when its coupon matches the applied coupon',
+    'an inactive campaign is not attributed even when an affiliate coupon was applied',
     { skip: hasPaymongoKey ? false : 'requires PAYMONGO_SECRET_KEY to create a real test-mode payment intent' },
     async () => {
-        const code = await createTestCoupon({ discountPercent: 0.10 });
+        const code = await createTestCoupon({ type: 'affiliate', discountPercent: 0.10 });
         let campaignId;
         try {
-            const campaign = await createTestCampaign({ couponCode: code, active: false });
+            const campaign = await createTestCampaign({ active: false });
             campaignId = campaign.id;
 
             const res = await request(app)
@@ -219,10 +222,10 @@ test(
     'payment.paid webhook confirms the reservation and campaign stats reflect paid count/revenue/commission',
     { skip: hasPaymongoKey ? false : 'requires PAYMONGO_SECRET_KEY to create a real test-mode payment intent' },
     async () => {
-        const code = await createTestCoupon({ discountPercent: 0.15, affiliateFeePercent: 0.10 });
+        const code = await createTestCoupon({ type: 'affiliate', discountPercent: 0.15, affiliateFeePercent: 0.10 });
         let campaignId;
         try {
-            const campaign = await createTestCampaign({ couponCode: code });
+            const campaign = await createTestCampaign();
             campaignId = campaign.id;
 
             const createRes = await request(app)
@@ -286,7 +289,7 @@ test('deleting a campaign with existing redemptions succeeds and sets campaign_i
         const campaign = await createTestCampaign({ couponCode: code });
         campaignId = campaign.id;
 
-        const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID });
+        const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID, email: 'fk-test@example.com' });
         assert.ok(reservation.coupon, `expected reservation to succeed: ${reservation.error}`);
         await couponStore.finalizeCouponReservation(reservation.client, {
             code,

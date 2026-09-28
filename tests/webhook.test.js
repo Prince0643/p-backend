@@ -11,7 +11,7 @@ const PRODUCT_ID = 'test_product';
 
 /** Reserves a coupon directly (no real PayMongo call needed) to set up a webhook test. */
 async function reserveDirectly(code, paymentReference) {
-    const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID });
+    const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID, email: 'webhook-test@example.com' });
     assert.ok(reservation.coupon, `expected reservation to succeed: ${reservation.error}`);
     return couponStore.finalizeCouponReservation(reservation.client, {
         code,
@@ -124,7 +124,7 @@ test('payment.failed releases the reservation so the coupon is usable again', as
         );
         assert.equal(rows[0].status, 'released');
 
-        const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID });
+        const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID, email: 'webhook-test@example.com' });
         assert.ok(reservation.coupon, 'coupon should be reservable again after the failed payment released it');
         await couponStore.abortCouponReservation(reservation.client);
     } finally {

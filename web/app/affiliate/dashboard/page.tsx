@@ -71,19 +71,22 @@ function money(value: number, currency: string) {
   }
 }
 
+type CampaignStats = { paidCount: number; pendingCount: number; revenue: number; commissionTotal: number };
+
 type Campaign = {
   id: string;
   name: string;
   slug: string;
+  siteName: string | null;
+  siteChannel: "local" | "global" | null;
   destinationUrl: string;
   link: string;
-  notes: string;
-  stats?: { paidCount: number; commissionTotal: number };
+  stats: CampaignStats;
   // currency is the single currency involved, or null when the campaign spans more
   // than one (e.g. legacy campaigns with both LOCAL/PHP and GLOBAL/USD sales) - in
   // that case statsByCurrency is the source of truth for display.
-  currency?: string | null;
-  statsByCurrency?: Record<string, { paidCount: number; commissionTotal: number }>;
+  currency: string | null;
+  statsByCurrency: Record<string, CampaignStats>;
 };
 
 function statusPill(status: string) {
@@ -103,6 +106,8 @@ export default function AffiliateDashboardPage() {
   const [totalsByCurrency, setTotalsByCurrency] = useState<Record<string, CurrencyTotals> | null>(null);
   const [copied, setCopied] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(true);
+  const [campaignsError, setCampaignsError] = useState<string | null>(null);
   const [copiedCampaignId, setCopiedCampaignId] = useState<string | null>(null);
 
   const [editingPayout, setEditingPayout] = useState(false);
@@ -140,7 +145,15 @@ export default function AffiliateDashboardPage() {
     if (!token) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
     load(token).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
-    loadCampaigns(token).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    setCampaignsLoading(true);
+    setCampaignsError(null);
+    loadCampaigns(token)
+      .catch((e) => {
+        if (!handleAuthError(e)) {
+          setCampaignsError((e as Error).message || "Could not load your campaigns.");
+        }
+      })
+      .finally(() => setCampaignsLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load intentionally not deps to avoid refetch loops
   }, [ready]);
 
@@ -287,21 +300,32 @@ export default function AffiliateDashboardPage() {
 
       <section className="mb-6 rounded-2xl border border-white/10 bg-white/[.03] p-5 shadow-2xl">
         <h2 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-400">Your Campaign Links</h2>
-        {campaigns.length === 0 ? (
-          <p className="text-sm text-slate-400">
-            No active campaigns yet. Your admin can create named links for you to share.
-          </p>
+        {campaignsLoading ? (
+          <p className="text-sm text-slate-400">Loading your campaigns…</p>
+        ) : campaignsError ? (
+          <p className="text-sm text-red-300">{campaignsError}</p>
+        ) : campaigns.length === 0 ? (
+          <p className="text-sm text-slate-400">No campaigns yet.</p>
         ) : (
           <div className="space-y-3">
             {campaigns.map((c) => (
               <div key={c.id} className="rounded-xl border border-white/10 bg-[#0a122480] p-3.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="font-bold">{c.name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold">{c.name}</span>
+                      {c.siteChannel && (
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${c.siteChannel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
+                          {c.siteChannel === "global" ? "Global" : "Local"}
+                        </span>
+                      )}
+                    </div>
+                    {c.siteName && <div className="mt-0.5 text-xs text-slate-500">{c.siteName}</div>}
                     <div className="mt-0.5 text-xs text-slate-400">
                       {c.stats?.paidCount ?? 0} paid sales
+                      {c.stats?.pendingCount ? ` · ${c.stats.pendingCount} pending` : ""}
                       {c.currency && (c.stats?.commissionTotal ?? 0) > 0 && (
-                        <> · {money(c.stats?.commissionTotal ?? 0, c.currency)} earned</>
+                        <> · {money(c.stats.commissionTotal, c.currency)} earned</>
                       )}
                       {!c.currency &&
                         c.statsByCurrency &&
@@ -311,10 +335,10 @@ export default function AffiliateDashboardPage() {
                             <span key={currency}> · {money(s.commissionTotal, currency)} earned</span>
                           ))}
                     </div>
-                    {c.notes && <div className="mt-0.5 text-xs text-slate-400">{c.notes}</div>}
                   </div>
                   <button
                     onClick={() => copyCampaignLink(c)}
+                    aria-label={`Copy your personal link for ${c.name}`}
                     className="rounded-lg border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-bold hover:bg-white/20"
                   >
                     {copiedCampaignId === c.id ? "Copied!" : "Copy Link"}

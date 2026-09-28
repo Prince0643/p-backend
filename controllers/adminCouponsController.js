@@ -12,10 +12,19 @@ const { importGlobalOrders } = require('../services/ghlOrderImport');
 
 exports.list = async (req, res) => {
     try {
-        const coupons = await listCoupons();
+        const coupons = await listCoupons({ type: req.query.type });
         res.json({ success: true, coupons });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list coupons' });
+    }
+};
+
+exports.listGhlLocations = async (req, res) => {
+    try {
+        const locations = ghlService.getConfiguredLocations().map(({ locationId, name }) => ({ locationId, name }));
+        res.json({ locations });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to list GHL locations' });
     }
 };
 
@@ -62,8 +71,9 @@ exports.listGhlCoupons = async (req, res) => {
 
 exports.syncGhlCoupons = async (req, res) => {
     try {
+        const dryRun = req.query.dryRun === '1' || req.query.dryRun === 'true';
         const coupons = await listCoupons();
-        const result = await ghlService.syncCouponsToGhlLocations(coupons);
+        const result = await ghlService.syncCouponsToGhlLocations(coupons, { dryRun });
         res.json({ success: true, ...result });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to sync coupons to GHL' });
@@ -82,7 +92,23 @@ exports.getOne = async (req, res) => {
 
 exports.upsert = async (req, res) => {
     try {
-        const saved = await upsertCoupon({ ...req.body, code: req.params.code || req.body?.code });
+        const code = req.params.code || req.body?.code;
+        const existing = code ? await findCoupon(code) : null;
+
+        // Admins manage GENERAL coupons only. Affiliate coupons are created exclusively
+        // by the affiliate-registration flow, and once created, their type is fixed.
+        if (!existing && req.body?.type === 'affiliate') {
+            return res.status(400).json({ error: 'Admins cannot create affiliate coupons directly' });
+        }
+        if (existing && req.body?.type !== undefined && req.body.type !== existing.type) {
+            return res.status(400).json({ error: `Cannot change coupon "${existing.code}" from type "${existing.type}"` });
+        }
+
+        const saved = await upsertCoupon({
+            ...req.body,
+            code,
+            type: existing ? existing.type : (req.body?.type || 'general')
+        });
         res.json({ success: true, coupon: saved });
     } catch (err) {
         res.status(400).json({ error: err.message || 'Failed to save coupon' });

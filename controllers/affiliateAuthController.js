@@ -68,16 +68,15 @@ exports.me = async (req, res) => {
     }
 };
 
-// GET /api/affiliates/me/campaigns (requires auth) - read-only list of the logged-in
-// affiliate's own active campaigns, so they can copy/share their links.
-// listCampaigns already attaches full stats {paidCount, pendingCount, revenue, discountTotal,
-// commissionTotal} via campaignStore.fetchCampaignStatsMap (one aggregate query, no N+1) - the
-// affiliate dashboard only needs paidCount/commissionTotal from it, extra fields are harmless.
+// GET /api/affiliates/me/campaigns (requires auth) - read-only list of EVERY active
+// campaign (on an active site), each carrying this affiliate's own personal link and
+// stats filtered to their coupon code - campaigns apply to all affiliates automatically,
+// including one who registers after the campaign was created. An affiliate with no
+// coupon code yet gets an empty list.
 exports.myCampaigns = async (req, res) => {
     try {
         const affiliate = req.affiliate;
-        if (!affiliate.couponCode) return res.json({ success: true, campaigns: [] });
-        const campaigns = await campaignStore.listCampaigns({ couponCode: affiliate.couponCode, active: true });
+        const campaigns = await campaignStore.listActiveCampaignsForAffiliate(affiliate);
         res.json({ success: true, campaigns });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to load campaigns' });

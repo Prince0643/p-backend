@@ -76,7 +76,9 @@ test('affiliate registration creates the generated coupon in GHL when configured
         assert.equal(calls[0].payload.code, reg.body.couponCode);
         assert.equal(calls[0].payload.discountType, 'percentage');
         assert.equal(calls[0].payload.discountValue, 15);
-        assert.equal(calls[0].payload.usageLimit, 1);
+        // Affiliate coupons have no total redemption cap (unlimited customers).
+        assert.equal('usageLimit' in calls[0].payload, false);
+        assert.equal(calls[0].payload.applyToFuturePayments, false);
         assert.equal(calls[0].payload.limitPerCustomer, true);
         assert.equal(calls[0].config.headers.Version, '2021-04-15');
     } finally {
@@ -87,23 +89,25 @@ test('affiliate registration creates the generated coupon in GHL when configured
     }
 });
 
-test('reactivating an affiliate does not bypass the coupon redemption cap', async () => {
+test('reactivating an affiliate does not let the same customer re-use the affiliate discount', async () => {
     const email = `affiliate.reactivate.${Date.now()}@example.com`;
+    const customerEmail = `affiliate.reactivate.customer.${Date.now()}@example.com`;
     try {
         const reg = await request(app).post('/api/affiliates/register').send(registrationPayload(email));
         assert.equal(reg.status, 201);
         const { affiliateId, couponCode } = reg.body;
 
-        // Consume the coupon's one redemption slot directly (reserve + confirm paid),
-        // without needing a real PayMongo call.
-        const reservation = await couponStore.beginCouponReservation({ code: couponCode, productId: PRODUCT_ID });
+        // Affiliate coupons have no total redemption cap (unlimited customers) - the rule
+        // that still applies is "one customer, one affiliate discount, ever". Consume it
+        // directly (reserve + confirm paid), without needing a real PayMongo call.
+        const reservation = await couponStore.beginCouponReservation({ code: couponCode, productId: PRODUCT_ID, email: customerEmail });
         assert.ok(reservation.coupon, `expected reservation to succeed: ${reservation.error}`);
         const paymentReference = `PAYTEST${Date.now()}`;
         await couponStore.finalizeCouponReservation(reservation.client, {
             code: couponCode,
             paymentReference,
             productId: PRODUCT_ID,
-            email,
+            email: customerEmail,
             fullName: 'Affiliate Test',
             baseAmount: 425,
             discountAmount: 75,
@@ -125,12 +129,19 @@ test('reactivating an affiliate does not bypass the coupon redemption cap', asyn
 
         const coupon = await couponStore.findCoupon(couponCode);
         assert.equal(coupon.active, true, 'reactivation should turn the coupon back on');
+        assert.equal(coupon.maxRedemptions, null, 'affiliate coupons have no total redemption cap');
 
-        // But the already-used redemption slot must still be exhausted - reactivating
-        // the affiliate must not reset or ignore the redemption count.
-        const second = await couponStore.beginCouponReservation({ code: couponCode, productId: PRODUCT_ID });
+        // The SAME customer must still be blocked (per-customer-once, across ALL
+        // affiliate codes) - reactivating the affiliate must not reset that.
+        const second = await couponStore.beginCouponReservation({ code: couponCode, productId: PRODUCT_ID, email: customerEmail });
         assert.equal(second.coupon, undefined);
-        assert.equal(second.reason, 'max_redemptions_reached');
+        assert.equal(second.reason, 'affiliate_already_used');
+
+        // But a DIFFERENT customer can still use this same affiliate code (unlimited
+        // total redemptions).
+        const other = await couponStore.beginCouponReservation({ code: couponCode, productId: PRODUCT_ID, email: `${email}.other-customer@example.com` });
+        assert.ok(other.coupon, `expected a different customer to still be able to use the code: ${other.error}`);
+        await couponStore.abortCouponReservation(other.client);
     } finally {
         await cleanupAffiliate(email);
     }

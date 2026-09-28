@@ -4,7 +4,6 @@
 // ref/campaign query params appended, computed on every read so it always reflects the
 // current destination_url (see buildCampaignLink).
 const pool = require('../db/pool');
-const couponStore = require('./couponStore');
 const campaignSiteStore = require('./campaignSiteStore');
 
 const SLUG_MIN_LENGTH = 2;
@@ -94,6 +93,16 @@ function buildCampaignLink(destinationUrl, couponCode, slug) {
     return url.toString();
 }
 
+// Placeholder run through buildCampaignLink (rather than hand-building the URL) so
+// querystring escaping/param-overwrite behavior stays identical to a real affiliate
+// link - then swapped back to the literal, human-readable `{CODE}` token admins expect
+// (URLSearchParams would otherwise percent-encode the braces).
+const LINK_TEMPLATE_PLACEHOLDER = '__CAMPAIGN_CODE_PLACEHOLDER__';
+function buildLinkTemplate(destinationUrl, slug) {
+    const link = buildCampaignLink(destinationUrl, LINK_TEMPLATE_PLACEHOLDER, slug);
+    return link.replace(LINK_TEMPLATE_PLACEHOLDER, '{CODE}');
+}
+
 function slugify(name) {
     return String(name || '')
         .trim()
@@ -140,44 +149,42 @@ function generateId() {
 }
 
 function rowToCampaign(row) {
-    const campaign = {
+    return {
         id: row.id,
         name: row.name,
         slug: row.slug,
-        couponCode: row.coupon_code,
         destinationUrl: row.destination_url,
         notes: row.notes || '',
         active: row.active,
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString(),
-        link: buildCampaignLink(row.destination_url, row.coupon_code, row.slug),
+        // One campaign now applies to every affiliate (no single coupon_code of its own),
+        // so there's no one "link" - linkTemplate is filled in per-affiliate by swapping
+        // {CODE} for their personal coupon code (see listActiveCampaignsForAffiliate).
+        linkTemplate: buildLinkTemplate(row.destination_url, row.slug),
         siteId: row.site_id || null,
         siteName: row.site_name || null,
         siteChannel: row.site_channel || null
     };
-    if (row.affiliate_id !== undefined) {
-        campaign.affiliate = row.affiliate_id
-            ? {
-                id: row.affiliate_id,
-                firstName: row.affiliate_first_name,
-                lastName: row.affiliate_last_name,
-                email: row.affiliate_email
-            }
-            : null;
-    }
-    return campaign;
 }
 
-const CAMPAIGN_WITH_AFFILIATE_QUERY = `
-    SELECT c.*, a.id AS affiliate_id, a.first_name AS affiliate_first_name,
-           a.last_name AS affiliate_last_name, a.email AS affiliate_email,
-           s.name AS site_name, s.channel AS site_channel
+const CAMPAIGN_QUERY = `
+    SELECT c.*, s.name AS site_name, s.channel AS site_channel
     FROM campaigns c
-    LEFT JOIN affiliates a ON a.coupon_code = c.coupon_code
     LEFT JOIN campaign_sites s ON s.id = c.site_id
 `;
 
 const EMPTY_STATS = { paidCount: 0, pendingCount: 0, revenue: 0, discountTotal: 0, commissionTotal: 0 };
+
+function sumStats(statsByCurrency) {
+    return Object.values(statsByCurrency).reduce((acc, s) => ({
+        paidCount: acc.paidCount + s.paidCount,
+        pendingCount: acc.pendingCount + s.pendingCount,
+        revenue: acc.revenue + s.revenue,
+        discountTotal: acc.discountTotal + s.discountTotal,
+        commissionTotal: acc.commissionTotal + s.commissionTotal
+    }), { ...EMPTY_STATS });
+}
 
 /**
  * One aggregate query (GROUP BY campaign_id) for redemption stats, keyed by campaign id.
@@ -252,11 +259,72 @@ async function fetchCampaignStatsByCurrencyMap(campaignIds) {
     return map;
 }
 
+/**
+ * Per-affiliate stats breakdown for a batch of campaigns, keyed by campaign id -> array
+ * of { affiliateId, affiliateName, affiliateEmail, couponCode, stats, statsByCurrency }.
+ * Every affiliate with a coupon code is listed for every campaign (even with all-zero
+ * stats), since one campaign now applies to all of them automatically. Two queries total
+ * regardless of campaign count (no N+1).
+ */
+async function fetchAffiliateStatsMap(campaignIds) {
+    const map = {};
+    if (!Array.isArray(campaignIds) || campaignIds.length === 0) return map;
+
+    const { rows: affiliates } = await pool.query(
+        `SELECT id, first_name, last_name, email, coupon_code FROM affiliates WHERE coupon_code IS NOT NULL`
+    );
+    for (const campaignId of campaignIds) map[campaignId] = [];
+    if (affiliates.length === 0) return map;
+
+    const couponCodes = affiliates.map((a) => a.coupon_code);
+    const { rows: statRows } = await pool.query(
+        `SELECT campaign_id, code, currency,
+                COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
+                COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+                COALESCE(SUM(base_amount) FILTER (WHERE status = 'paid'), 0) AS revenue,
+                COALESCE(SUM(discount_amount) FILTER (WHERE status = 'paid'), 0) AS discount_total,
+                COALESCE(SUM(affiliate_fee_amount) FILTER (WHERE status = 'paid'), 0) AS commission_total
+         FROM coupon_redemptions
+         WHERE campaign_id = ANY($1::text[]) AND code = ANY($2::text[])
+         GROUP BY campaign_id, code, currency`,
+        [campaignIds, couponCodes]
+    );
+
+    const byCampaignCode = {};
+    for (const row of statRows) {
+        byCampaignCode[row.campaign_id] = byCampaignCode[row.campaign_id] || {};
+        byCampaignCode[row.campaign_id][row.code] = byCampaignCode[row.campaign_id][row.code] || {};
+        byCampaignCode[row.campaign_id][row.code][row.currency] = {
+            paidCount: row.paid_count,
+            pendingCount: row.pending_count,
+            revenue: Number(row.revenue),
+            discountTotal: Number(row.discount_total),
+            commissionTotal: Number(row.commission_total)
+        };
+    }
+
+    for (const campaignId of campaignIds) {
+        map[campaignId] = affiliates.map((a) => {
+            const statsByCurrency = (byCampaignCode[campaignId] && byCampaignCode[campaignId][a.coupon_code]) || {};
+            return {
+                affiliateId: a.id,
+                affiliateName: `${a.first_name} ${a.last_name}`.trim(),
+                affiliateEmail: a.email,
+                couponCode: a.coupon_code,
+                stats: sumStats(statsByCurrency),
+                statsByCurrency
+            };
+        });
+    }
+    return map;
+}
+
 async function attachStats(campaigns) {
     const campaignIds = campaigns.map((c) => c.id);
-    const [statsMap, statsByCurrencyMap] = await Promise.all([
+    const [statsMap, statsByCurrencyMap, affiliateStatsMap] = await Promise.all([
         fetchCampaignStatsMap(campaignIds),
-        fetchCampaignStatsByCurrencyMap(campaignIds)
+        fetchCampaignStatsByCurrencyMap(campaignIds),
+        fetchAffiliateStatsMap(campaignIds)
     ]);
     return campaigns.map((c) => {
         const statsByCurrency = statsByCurrencyMap[c.id] || {};
@@ -265,30 +333,27 @@ async function attachStats(campaigns) {
             ...c,
             stats: statsMap[c.id] || { ...EMPTY_STATS },
             statsByCurrency,
-            currency: currencies.length === 1 ? currencies[0] : null
+            currency: currencies.length === 1 ? currencies[0] : null,
+            affiliateStats: affiliateStatsMap[c.id] || []
         };
     });
 }
 
-async function listCampaigns({ couponCode, active } = {}) {
+async function listCampaigns({ active } = {}) {
     const conditions = [];
     const params = [];
-    if (couponCode) {
-        params.push(couponStore.toCouponCode(couponCode));
-        conditions.push(`c.coupon_code = $${params.length}`);
-    }
     if (active !== undefined && active !== null && active !== '') {
         params.push(active === true || active === 'true');
         conditions.push(`c.active = $${params.length}`);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const { rows } = await pool.query(`${CAMPAIGN_WITH_AFFILIATE_QUERY} ${where} ORDER BY c.created_at DESC`, params);
+    const { rows } = await pool.query(`${CAMPAIGN_QUERY} ${where} ORDER BY c.created_at DESC`, params);
     return attachStats(rows.map(rowToCampaign));
 }
 
 async function findCampaignById(id) {
     if (!id) return null;
-    const { rows } = await pool.query(`${CAMPAIGN_WITH_AFFILIATE_QUERY} WHERE c.id = $1`, [id]);
+    const { rows } = await pool.query(`${CAMPAIGN_QUERY} WHERE c.id = $1`, [id]);
     if (!rows[0]) return null;
     const [campaign] = await attachStats([rowToCampaign(rows[0])]);
     return campaign;
@@ -298,8 +363,66 @@ async function findCampaignById(id) {
 async function findCampaignBySlug(slug) {
     const normalized = String(slug || '').trim().toLowerCase();
     if (!normalized) return null;
-    const { rows } = await pool.query(`${CAMPAIGN_WITH_AFFILIATE_QUERY} WHERE c.slug = $1`, [normalized]);
+    const { rows } = await pool.query(`${CAMPAIGN_QUERY} WHERE c.slug = $1`, [normalized]);
     return rows[0] ? rowToCampaign(rows[0]) : null;
+}
+
+/**
+ * Every active campaign on an active site, each carrying THIS affiliate's own personal
+ * link (destination + their coupon code) and stats filtered to their coupon code only -
+ * campaigns apply to every affiliate automatically, including one who registered after
+ * the campaign was created.
+ */
+async function listActiveCampaignsForAffiliate(affiliate) {
+    if (!affiliate?.couponCode) return [];
+
+    const { rows } = await pool.query(
+        `${CAMPAIGN_QUERY} WHERE c.active = true AND s.active = true ORDER BY c.created_at DESC`
+    );
+    const campaigns = rows.map(rowToCampaign);
+    if (campaigns.length === 0) return [];
+
+    const campaignIds = campaigns.map((c) => c.id);
+    const { rows: statRows } = await pool.query(
+        `SELECT campaign_id, currency,
+                COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
+                COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+                COALESCE(SUM(base_amount) FILTER (WHERE status = 'paid'), 0) AS revenue,
+                COALESCE(SUM(discount_amount) FILTER (WHERE status = 'paid'), 0) AS discount_total,
+                COALESCE(SUM(affiliate_fee_amount) FILTER (WHERE status = 'paid'), 0) AS commission_total
+         FROM coupon_redemptions
+         WHERE campaign_id = ANY($1::text[]) AND code = $2
+         GROUP BY campaign_id, currency`,
+        [campaignIds, affiliate.couponCode]
+    );
+    const byCampaign = {};
+    for (const row of statRows) {
+        byCampaign[row.campaign_id] = byCampaign[row.campaign_id] || {};
+        byCampaign[row.campaign_id][row.currency] = {
+            paidCount: row.paid_count,
+            pendingCount: row.pending_count,
+            revenue: Number(row.revenue),
+            discountTotal: Number(row.discount_total),
+            commissionTotal: Number(row.commission_total)
+        };
+    }
+
+    return campaigns.map((c) => {
+        const statsByCurrency = byCampaign[c.id] || {};
+        const currencies = Object.keys(statsByCurrency);
+        return {
+            id: c.id,
+            name: c.name,
+            slug: c.slug,
+            siteName: c.siteName,
+            siteChannel: c.siteChannel,
+            destinationUrl: c.destinationUrl,
+            link: buildCampaignLink(c.destinationUrl, affiliate.couponCode, c.slug),
+            stats: sumStats(statsByCurrency),
+            statsByCurrency,
+            currency: currencies.length === 1 ? currencies[0] : null
+        };
+    });
 }
 
 async function createCampaign(payload) {
@@ -307,9 +430,6 @@ async function createCampaign(payload) {
 
     const name = String(payload.name || '').trim();
     if (!name) throw new Error('name is required');
-
-    const couponCode = couponStore.toCouponCode(payload.couponCode);
-    if (!couponCode) throw new Error('couponCode is required');
 
     const siteId = String(payload.siteId || '').trim();
     if (!siteId) throw new Error('siteId is required');
@@ -329,13 +449,6 @@ async function createCampaign(payload) {
     try {
         await client.query('BEGIN');
 
-        const { rows: couponRows } = await client.query('SELECT 1 FROM coupons WHERE code = $1', [couponCode]);
-        if (couponRows.length === 0) {
-            const err = new Error(`Coupon "${couponCode}" does not exist`);
-            err.statusCode = 400;
-            throw err;
-        }
-
         let slug = payload.slug ? slugify(payload.slug) : '';
         if (payload.slug) {
             validateSlugFormat(slug);
@@ -351,9 +464,9 @@ async function createCampaign(payload) {
 
         const id = generateId();
         await client.query(
-            `INSERT INTO campaigns (id, name, slug, coupon_code, destination_url, notes, active, site_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [id, name, slug, couponCode, destination.toString(), notes, active, siteId]
+            `INSERT INTO campaigns (id, name, slug, destination_url, notes, active, site_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [id, name, slug, destination.toString(), notes, active, siteId]
         );
 
         await client.query('COMMIT');
@@ -383,19 +496,6 @@ async function updateCampaign(id, payload) {
 
         const name = payload.name !== undefined ? String(payload.name || '').trim() : existing.name;
         if (!name) throw new Error('name is required');
-
-        const couponCode = payload.couponCode !== undefined
-            ? couponStore.toCouponCode(payload.couponCode)
-            : existing.coupon_code;
-        if (!couponCode) throw new Error('couponCode is required');
-        if (couponCode !== existing.coupon_code) {
-            const { rows: couponRows } = await client.query('SELECT 1 FROM coupons WHERE code = $1', [couponCode]);
-            if (couponRows.length === 0) {
-                const err = new Error(`Coupon "${couponCode}" does not exist`);
-                err.statusCode = 400;
-                throw err;
-            }
-        }
 
         let siteId = existing.site_id;
         let requiredHostname;
@@ -434,10 +534,12 @@ async function updateCampaign(id, payload) {
         const notes = payload.notes !== undefined ? (payload.notes ? String(payload.notes) : null) : existing.notes;
         const active = payload.active !== undefined ? Boolean(payload.active) : existing.active;
 
+        // Note: couponCode is deliberately not accepted/updated here - campaigns are no
+        // longer tied to a single coupon (see class-level comment at the top of this file).
         await client.query(
-            `UPDATE campaigns SET name = $2, slug = $3, coupon_code = $4, destination_url = $5, notes = $6, active = $7, site_id = $8, updated_at = now()
+            `UPDATE campaigns SET name = $2, slug = $3, destination_url = $4, notes = $5, active = $6, site_id = $7, updated_at = now()
              WHERE id = $1`,
-            [id, name, slug, couponCode, destinationUrl, notes, active, siteId]
+            [id, name, slug, destinationUrl, notes, active, siteId]
         );
 
         await client.query('COMMIT');
@@ -460,10 +562,12 @@ module.exports = {
     isAllowedHostname,
     validateDestinationUrl,
     buildCampaignLink,
+    buildLinkTemplate,
     slugify,
     listCampaigns,
     findCampaignById,
     findCampaignBySlug,
+    listActiveCampaignsForAffiliate,
     createCampaign,
     updateCampaign,
     deleteCampaign,

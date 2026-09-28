@@ -7,8 +7,8 @@ function statusForError(err) {
 
 exports.list = async (req, res) => {
     try {
-        const { couponCode, active } = req.query;
-        const campaigns = await campaignStore.listCampaigns({ couponCode, active });
+        const { active } = req.query;
+        const campaigns = await campaignStore.listCampaigns({ active });
         res.json({ success: true, campaigns });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list campaigns' });

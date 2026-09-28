@@ -207,6 +207,16 @@ class GhlService {
             startDate: coupon.startDate || coupon.startsAt || null,
             endDate: coupon.endDate || coupon.expiresAt || null,
             createdAt: coupon.createdAt || null,
+            // GHL's Update Coupon (PUT /payments/coupon) is a full replace - these fields
+            // must be carried over from the existing coupon on update unless our DB
+            // intends to change them, or an update would silently wipe e.g. product
+            // restrictions. There is no `status` field on update, so active/inactive
+            // drift can only be reported, never synced (see couponNeedsUpdate).
+            applyToFuturePayments: coupon.applyToFuturePayments,
+            limitPerCustomer: coupon.limitPerCustomer,
+            productIds: Array.isArray(coupon.productIds) ? coupon.productIds : [],
+            priceIds: Array.isArray(coupon.priceIds) ? coupon.priceIds : [],
+            variantIds: Array.isArray(coupon.variantIds) ? coupon.variantIds : [],
             locationName: location.name,
             locationId: location.locationId
         };
@@ -299,6 +309,7 @@ class GhlService {
         };
     }
 
+    /** Payload for POST /payments/coupon (create). */
     buildCouponPayload(coupon, locationId) {
         const payload = {
             altId: locationId,
@@ -308,15 +319,80 @@ class GhlService {
             discountType: 'percentage',
             discountValue: Number((Number(coupon.discountPercent || 0) * 100).toFixed(4)),
             startDate: new Date().toISOString(),
-            usageLimit: coupon.maxRedemptions || undefined,
-            endDate: coupon.expiresAt || undefined,
-            applyToFuturePayments: true,
-            applyToFuturePaymentsConfig: { type: 'forever' },
+            // GHL defaults applyToFuturePayments to TRUE and limitPerCustomer to FALSE
+            // when omitted - both are always sent explicitly so a coupon never silently
+            // gets the opposite of what we intend.
+            applyToFuturePayments: false,
             limitPerCustomer: true
         };
+        if (coupon.maxRedemptions) payload.usageLimit = coupon.maxRedemptions;
+        if (coupon.expiresAt) payload.endDate = coupon.expiresAt;
 
         Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
         return payload;
+    }
+
+    /**
+     * Payload for PUT /payments/coupon (update - full replace, id in body, NOT in the
+     * URL). Must carry over the existing GHL coupon's productIds/priceIds/variantIds/
+     * startDate/name unless our DB intends to change them, or the update would silently
+     * wipe e.g. OCTFEST15's product restrictions. There is no `status` field on update.
+     */
+    buildCouponUpdatePayload(existingGhlCoupon, coupon, locationId) {
+        const payload = {
+            id: existingGhlCoupon.id,
+            altId: locationId,
+            altType: 'location',
+            name: coupon.name || existingGhlCoupon.name || coupon.code,
+            code: coupon.code,
+            discountType: 'percentage',
+            discountValue: Number((Number(coupon.discountPercent || 0) * 100).toFixed(4)),
+            startDate: existingGhlCoupon.startDate || new Date().toISOString(),
+            applyToFuturePayments: false,
+            limitPerCustomer: true
+        };
+        if (coupon.maxRedemptions) payload.usageLimit = coupon.maxRedemptions;
+        if (coupon.expiresAt) payload.endDate = coupon.expiresAt;
+        if (Array.isArray(existingGhlCoupon.productIds) && existingGhlCoupon.productIds.length) {
+            payload.productIds = existingGhlCoupon.productIds;
+        }
+        if (Array.isArray(existingGhlCoupon.priceIds) && existingGhlCoupon.priceIds.length) {
+            payload.priceIds = existingGhlCoupon.priceIds;
+        }
+        if (Array.isArray(existingGhlCoupon.variantIds) && existingGhlCoupon.variantIds.length) {
+            payload.variantIds = existingGhlCoupon.variantIds;
+        }
+
+        Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+        return payload;
+    }
+
+    /**
+     * True if the existing GHL coupon's syncable settings have drifted from what our
+     * local coupon record wants. Status (active/inactive) is deliberately excluded -
+     * there is no way to toggle it via Update Coupon, so drift there is reported
+     * separately as "not syncable" rather than attempted.
+     */
+    couponNeedsUpdate(existingGhlCoupon, coupon) {
+        const expectedDiscountValue = Number((Number(coupon.discountPercent || 0) * 100).toFixed(4));
+        const expectedUsageLimit = coupon.maxRedemptions || null;
+        const existingUsageLimit = existingGhlCoupon.usageLimit || null;
+        const expectedEndDate = coupon.expiresAt ? new Date(coupon.expiresAt).toISOString() : null;
+        const existingEndDate = existingGhlCoupon.endDate ? new Date(existingGhlCoupon.endDate).toISOString() : null;
+
+        if (Number(existingGhlCoupon.discountValue) !== expectedDiscountValue) return true;
+        if (existingUsageLimit !== expectedUsageLimit) return true;
+        if (existingEndDate !== expectedEndDate) return true;
+        if (existingGhlCoupon.applyToFuturePayments !== false) return true;
+        if (existingGhlCoupon.limitPerCustomer !== true) return true;
+        return false;
+    }
+
+    /** True if the coupon's active/inactive status can't be reflected by an update call (always, today). */
+    statusDrifted(existingGhlCoupon, coupon) {
+        const wantActive = Boolean(coupon.active);
+        const isActive = String(existingGhlCoupon.status || '').toLowerCase() === 'active';
+        return wantActive !== isActive;
     }
 
     async createCouponForLocation(location, coupon) {
@@ -330,22 +406,35 @@ class GhlService {
         return this.normalizeCoupon(res.data || payload, location);
     }
 
-    async syncCouponsToGhlLocations(coupons = []) {
-        const locations = this.getConfiguredLocations();
-        const results = [];
+    async updateCouponForLocation(location, existingGhlCoupon, coupon) {
+        const client = this.createClient({
+            privateKey: location.privateKey,
+            locationId: location.locationId,
+            version: 'v3'
+        });
+        const payload = this.buildCouponUpdatePayload(existingGhlCoupon, coupon, location.locationId);
+        const res = await client.put('/payments/coupon', payload);
+        return this.normalizeCoupon(res.data || payload, location);
+    }
+
+    /**
+     * Creates missing coupons and updates drifted ones across configured GHL locations.
+     * AFFILIATE coupons sync to every configured location; GENERAL coupons sync only to
+     * their `ghlLocationIds` (or every location when that's null). `dryRun: true` reports
+     * the planned creates/updates without writing anything.
+     */
+    async syncCouponsToGhlLocations(coupons = [], { dryRun = false } = {}) {
+        const allLocations = this.getConfiguredLocations();
         const activeCoupons = coupons.filter((coupon) => coupon.active);
         const inactiveCoupons = coupons.filter((coupon) => !coupon.active);
+        const results = [];
 
-        if (locations.length === 0) {
+        if (allLocations.length === 0) {
             return {
                 summary: {
-                    locations: 0,
-                    localCoupons: coupons.length,
-                    activeCoupons: activeCoupons.length,
-                    created: 0,
-                    skippedExisting: 0,
-                    skippedInactive: inactiveCoupons.length,
-                    errors: coupons.length
+                    locations: 0, localCoupons: coupons.length, activeCoupons: activeCoupons.length,
+                    created: 0, updated: 0, unchanged: 0, notSyncable: 0,
+                    skippedInactive: inactiveCoupons.length, errors: coupons.length, dryRun
                 },
                 results: coupons.map((coupon) => ({
                     code: coupon.code,
@@ -355,80 +444,97 @@ class GhlService {
             };
         }
 
-        for (const location of locations) {
-            let existingCodes = new Set();
+        const targetLocationsFor = (coupon) => {
+            if (coupon.type === 'affiliate') return allLocations;
+            if (Array.isArray(coupon.ghlLocationIds) && coupon.ghlLocationIds.length > 0) {
+                return allLocations.filter((l) => coupon.ghlLocationIds.includes(l.locationId));
+            }
+            return allLocations;
+        };
+
+        const existingCache = new Map();
+        const getExistingForLocation = async (location) => {
+            if (existingCache.has(location.locationId)) return existingCache.get(location.locationId);
             try {
                 const existing = await this.listCouponsForLocation(location);
-                existingCodes = new Set(existing.coupons.map((coupon) => String(coupon.code || '').toUpperCase()).filter(Boolean));
+                const map = new Map(existing.coupons.map((c) => [String(c.code || '').toUpperCase(), c]));
+                existingCache.set(location.locationId, map);
+                return map;
             } catch (err) {
                 const error = err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to list GHL coupons';
-                for (const coupon of activeCoupons) {
-                    results.push({
-                        locationName: location.name,
-                        locationId: location.locationId,
-                        code: coupon.code,
-                        action: 'error',
-                        error
-                    });
-                }
-                continue;
+                const errored = { error };
+                existingCache.set(location.locationId, errored);
+                return errored;
             }
+        };
 
-            for (const coupon of activeCoupons) {
-                if (existingCodes.has(String(coupon.code).toUpperCase())) {
-                    results.push({
-                        locationName: location.name,
-                        locationId: location.locationId,
-                        code: coupon.code,
-                        action: 'skipped_existing'
-                    });
+        for (const coupon of activeCoupons) {
+            for (const location of targetLocationsFor(coupon)) {
+                const existingMap = await getExistingForLocation(location);
+                if (existingMap.error) {
+                    results.push({ locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'error', error: existingMap.error });
                     continue;
                 }
 
+                const existingCoupon = existingMap.get(String(coupon.code).toUpperCase());
+
+                if (!existingCoupon) {
+                    if (dryRun) {
+                        results.push({ locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'would_create' });
+                        continue;
+                    }
+                    try {
+                        const created = await this.createCouponForLocation(location, { ...coupon, name: coupon.notes || coupon.code });
+                        results.push({ locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'created', ghlCouponId: created.id || null });
+                        existingMap.set(String(coupon.code).toUpperCase(), created);
+                    } catch (err) {
+                        results.push({
+                            locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'error',
+                            error: err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to create GHL coupon'
+                        });
+                    }
+                    continue;
+                }
+
+                const statusNote = this.statusDrifted(existingCoupon, coupon) ? 'not_syncable_status' : null;
+                if (!this.couponNeedsUpdate(existingCoupon, coupon)) {
+                    results.push({ locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'unchanged', note: statusNote });
+                    continue;
+                }
+                if (dryRun) {
+                    results.push({ locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'would_update', note: statusNote });
+                    continue;
+                }
                 try {
-                    const created = await this.createCouponForLocation(location, {
-                        ...coupon,
-                        name: coupon.notes || coupon.code
-                    });
-                    results.push({
-                        locationName: location.name,
-                        locationId: location.locationId,
-                        code: coupon.code,
-                        action: 'created',
-                        ghlCouponId: created.id || null
-                    });
-                    existingCodes.add(String(coupon.code).toUpperCase());
+                    const updated = await this.updateCouponForLocation(location, existingCoupon, coupon);
+                    results.push({ locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'updated', ghlCouponId: updated.id || existingCoupon.id || null, note: statusNote });
                 } catch (err) {
                     results.push({
-                        locationName: location.name,
-                        locationId: location.locationId,
-                        code: coupon.code,
-                        action: 'error',
-                        error: err.response?.data?.message
-                            || err.response?.data?.error
-                            || err.message
-                            || 'Failed to create GHL coupon'
+                        locationName: location.name, locationId: location.locationId, code: coupon.code, action: 'error',
+                        error: err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to update GHL coupon'
                     });
                 }
             }
         }
 
         for (const coupon of inactiveCoupons) {
-            results.push({
-                code: coupon.code,
-                action: 'skipped_inactive'
-            });
+            results.push({ code: coupon.code, action: 'skipped_inactive' });
         }
 
         return {
             summary: {
-                locations: locations.length,
+                locations: allLocations.length,
                 localCoupons: coupons.length,
                 activeCoupons: activeCoupons.length,
-                created: results.filter((result) => result.action === 'created').length,
-                skippedExisting: results.filter((result) => result.action === 'skipped_existing').length,
+                created: results.filter((r) => r.action === 'created').length,
+                updated: results.filter((r) => r.action === 'updated').length,
+                unchanged: results.filter((r) => r.action === 'unchanged').length,
+                wouldCreate: results.filter((r) => r.action === 'would_create').length,
+                wouldUpdate: results.filter((r) => r.action === 'would_update').length,
+                notSyncable: results.filter((r) => r.note === 'not_syncable_status').length,
                 skippedInactive: inactiveCoupons.length,
-                errors: results.filter((result) => result.action === 'error').length
+                errors: results.filter((r) => r.action === 'error').length,
+                dryRun
             },
             results
         };
@@ -450,8 +556,7 @@ class GhlService {
             usageLimit: maxRedemptions || undefined,
             productIds: Array.isArray(productIds) && productIds.length ? productIds : undefined,
             endDate: expiresAt || undefined,
-            applyToFuturePayments: true,
-            applyToFuturePaymentsConfig: { type: 'forever' },
+            applyToFuturePayments: false,
             limitPerCustomer: true
         };
 

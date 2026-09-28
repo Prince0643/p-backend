@@ -12,6 +12,31 @@ function toCouponCode(input) {
         .replace(/[^A-Z0-9_-]+/g, '');
 }
 
+/** trim+lowercase - the customer-identity key used for all "once per customer" coupon rules. */
+function normalizeEmail(input) {
+    return String(input || '').trim().toLowerCase();
+}
+
+const COUPON_TYPES = ['affiliate', 'general'];
+
+/** Returns undefined (caller should treat as "not specified") for empty/nullish input, else validates the enum. */
+function normalizeCouponType(value) {
+    if (value === undefined || value === null || value === '') return undefined;
+    const type = String(value).trim().toLowerCase();
+    if (!COUPON_TYPES.includes(type)) {
+        throw new Error(`type must be one of ${COUPON_TYPES.join(', ')}`);
+    }
+    return type;
+}
+
+/** undefined = not specified (preserve on update, defaults handled by caller); null = explicit "all locations". */
+function normalizeGhlLocationIds(value) {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    if (!Array.isArray(value)) throw new Error('ghlLocationIds must be an array of strings, or null');
+    return value.map((v) => String(v).trim()).filter(Boolean);
+}
+
 function normalizePercent(value, fieldName, { required = false, defaultValue = 0 } = {}) {
     if (value == null || value === '') {
         if (required) throw new Error(`${fieldName} is required`);
@@ -60,12 +85,21 @@ function normalizeCouponInput(payload) {
 
     const notes = payload.notes ? String(payload.notes) : null;
 
-    return { code, discountPercent, affiliateFeePercent, affiliateEmail, active, expiresAt, productIds, maxRedemptions, notes };
+    const type = normalizeCouponType(payload.type);
+    const ghlLocationIds = normalizeGhlLocationIds(payload.ghlLocationIds);
+    const localEnabled = payload.localEnabled === undefined ? undefined : Boolean(payload.localEnabled);
+    const ghlCouponMeta = payload.ghlCouponMeta !== undefined ? payload.ghlCouponMeta : undefined;
+
+    return {
+        code, discountPercent, affiliateFeePercent, affiliateEmail, active, expiresAt, productIds, maxRedemptions, notes,
+        type, ghlLocationIds, localEnabled, ghlCouponMeta
+    };
 }
 
 function rowToCoupon(row, productIds = []) {
-    return {
+    const coupon = {
         code: row.code,
+        type: row.type || 'general',
         discountPercent: Number(row.discount_percent),
         affiliateFeePercent: Number(row.affiliate_fee_percent),
         affiliateEmail: row.affiliate_email || '',
@@ -73,36 +107,80 @@ function rowToCoupon(row, productIds = []) {
         expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
         productIds,
         maxRedemptions: row.max_redemptions,
-        notes: row.notes || ''
+        notes: row.notes || '',
+        ghlLocationIds: row.ghl_location_ids || null,
+        localEnabled: row.local_enabled !== false,
+        ghlCouponMeta: row.ghl_coupon_meta || null
     };
+    if (row.affiliate_id !== undefined) {
+        coupon.affiliate = row.affiliate_id
+            ? {
+                id: row.affiliate_id,
+                name: `${row.affiliate_first_name || ''} ${row.affiliate_last_name || ''}`.trim(),
+                email: row.affiliate_linked_email
+            }
+            : null;
+    }
+    return coupon;
 }
 
 const COUPON_WITH_PRODUCTS_QUERY = `
-    SELECT c.*, COALESCE(array_agg(cp.product_id) FILTER (WHERE cp.product_id IS NOT NULL), '{}') AS product_ids
+    SELECT c.*, COALESCE(array_agg(cp.product_id) FILTER (WHERE cp.product_id IS NOT NULL), '{}') AS product_ids,
+           a.id AS affiliate_id, a.first_name AS affiliate_first_name, a.last_name AS affiliate_last_name, a.email AS affiliate_linked_email
     FROM coupons c
     LEFT JOIN coupon_products cp ON cp.coupon_code = c.code
+    LEFT JOIN affiliates a ON a.coupon_code = c.code
 `;
+const COUPON_GROUP_BY = 'GROUP BY c.code, a.id, a.first_name, a.last_name, a.email';
 
-async function listCoupons() {
-    const { rows } = await pool.query(`${COUPON_WITH_PRODUCTS_QUERY} GROUP BY c.code ORDER BY c.code ASC`);
+async function listCoupons({ type } = {}) {
+    const conditions = [];
+    const params = [];
+    if (type) {
+        params.push(normalizeCouponType(type));
+        conditions.push(`c.type = $${params.length}`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await pool.query(`${COUPON_WITH_PRODUCTS_QUERY} ${where} ${COUPON_GROUP_BY} ORDER BY c.code ASC`, params);
     return rows.map((r) => rowToCoupon(r, r.product_ids));
 }
 
 async function findCoupon(code) {
     const normalizedCode = toCouponCode(code);
     if (!normalizedCode) return null;
-    const { rows } = await pool.query(`${COUPON_WITH_PRODUCTS_QUERY} WHERE c.code = $1 GROUP BY c.code`, [normalizedCode]);
+    const { rows } = await pool.query(`${COUPON_WITH_PRODUCTS_QUERY} WHERE c.code = $1 ${COUPON_GROUP_BY}`, [normalizedCode]);
     return rows[0] ? rowToCoupon(rows[0], rows[0].product_ids) : null;
 }
 
+/**
+ * Creates or fully replaces a coupon. `type` is sticky once a coupon exists - if the
+ * caller doesn't pass one, the existing type is kept (never silently reset to
+ * 'general'); if the caller passes one that conflicts with the existing type, the
+ * upsert is rejected (a coupon's type is fixed at creation - see the admin controller
+ * for the additional "admin cannot create an affiliate coupon" rule).
+ */
 async function upsertCoupon(payload) {
     const c = normalizeCouponInput(payload);
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
+
+        const { rows: existingRows } = await client.query('SELECT type FROM coupons WHERE code = $1 FOR UPDATE', [c.code]);
+        const existingType = existingRows[0]?.type;
+        let type;
+        if (c.type !== undefined) {
+            if (existingType && c.type !== existingType) {
+                throw new Error(`Cannot change coupon "${c.code}" from type "${existingType}" to "${c.type}"`);
+            }
+            type = c.type;
+        } else {
+            type = existingType || 'general';
+        }
+        const localEnabled = c.localEnabled === undefined ? true : c.localEnabled;
+
         await client.query(
-            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now())
+            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, type, ghl_location_ids, local_enabled, ghl_coupon_meta, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
              ON CONFLICT (code) DO UPDATE SET
                 discount_percent = EXCLUDED.discount_percent,
                 affiliate_fee_percent = EXCLUDED.affiliate_fee_percent,
@@ -111,8 +189,15 @@ async function upsertCoupon(payload) {
                 expires_at = EXCLUDED.expires_at,
                 max_redemptions = EXCLUDED.max_redemptions,
                 notes = EXCLUDED.notes,
+                type = EXCLUDED.type,
+                ghl_location_ids = EXCLUDED.ghl_location_ids,
+                local_enabled = EXCLUDED.local_enabled,
+                ghl_coupon_meta = COALESCE(EXCLUDED.ghl_coupon_meta, coupons.ghl_coupon_meta),
                 updated_at = now()`,
-            [c.code, c.discountPercent, c.affiliateFeePercent, c.affiliateEmail, c.active, c.expiresAt, c.maxRedemptions, c.notes]
+            [
+                c.code, c.discountPercent, c.affiliateFeePercent, c.affiliateEmail, c.active, c.expiresAt, c.maxRedemptions, c.notes,
+                type, c.ghlLocationIds ?? null, localEnabled, c.ghlCouponMeta ? JSON.stringify(c.ghlCouponMeta) : null
+            ]
         );
         await client.query('DELETE FROM coupon_products WHERE coupon_code = $1', [c.code]);
         for (const productId of c.productIds) {
@@ -168,9 +253,11 @@ const PENDING_RESERVATION_TTL_MINUTES = 30;
  * or abortCouponReservation (rolls back), which release the client either way.
  * On failure, returns { error, reason } and the transaction/client are already closed.
  */
-async function beginCouponReservation({ code, productId }) {
+async function beginCouponReservation({ code, productId, email }) {
     const normalizedCode = toCouponCode(code);
     if (!normalizedCode) return { error: 'No promo code provided' };
+
+    const normalizedEmail = normalizeEmail(email);
 
     const client = await pool.connect();
     const fail = async (error, reason) => {
@@ -192,6 +279,19 @@ async function beginCouponReservation({ code, productId }) {
             return await fail('This promo code has expired', 'expired');
         }
 
+        // General (non-affiliate) coupons imported from GHL, or otherwise scoped away from
+        // the Local funnel, are treated as an invalid code here.
+        if (couponRow.type !== 'affiliate' && couponRow.local_enabled === false) {
+            return await fail('This coupon is not valid for this checkout.', 'not_local_enabled');
+        }
+
+        // Applying ANY coupon requires an email, so the per-customer rules below have
+        // something to key on. The checkout itself already requires email as a top-level
+        // field - this only matters if a caller reaches this path without one.
+        if (!normalizedEmail) {
+            return await fail('An email address is required to apply a coupon', 'email_required');
+        }
+
         const { rows: productRows } = await client.query(
             'SELECT product_id FROM coupon_products WHERE coupon_code = $1',
             [normalizedCode]
@@ -199,6 +299,70 @@ async function beginCouponReservation({ code, productId }) {
         const productIds = productRows.map((r) => r.product_id);
         if (productIds.length > 0 && productId && !productIds.includes(productId)) {
             return await fail('This promo code is not valid for the selected product', 'product_not_eligible');
+        }
+
+        if (couponRow.type === 'affiliate') {
+            // Affiliate codes have no total redemption cap, but a given customer may only
+            // ever get ONE affiliate discount, across ALL affiliate codes (Local or
+            // Global-imported). The coupon-row lock above only serializes concurrent
+            // checkouts for THIS code, so also take an advisory lock keyed on the
+            // customer's email to serialize concurrent checkouts across different
+            // affiliate codes for the same customer.
+            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [normalizedEmail]);
+
+            // This same customer's own still-fresh, unpaid attempt(s) - at any affiliate
+            // code - are abandoned/superseded by this new checkout, not a second use: a
+            // customer who opens checkout, abandons the PayMongo page, and retries within
+            // the TTL must not be blocked by their own dangling 'pending' row. Once
+            // superseded, only a genuinely PAID prior use blocks them below.
+            await client.query(
+                `UPDATE coupon_redemptions cr
+                 SET status = 'released', released_at = now()
+                 FROM coupons c2
+                 WHERE cr.code = c2.code AND c2.type = 'affiliate'
+                   AND lower(cr.email) = $1
+                   AND cr.status = 'pending'
+                   AND cr.created_at > now() - $2::interval`,
+                [normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
+            );
+
+            const { rows: priorRows } = await client.query(
+                `SELECT 1 FROM coupon_redemptions cr
+                 JOIN coupons c2 ON c2.code = cr.code
+                 WHERE c2.type = 'affiliate'
+                   AND lower(cr.email) = $1
+                   AND cr.status = 'paid'
+                 LIMIT 1`,
+                [normalizedEmail]
+            );
+            if (priorRows.length > 0) {
+                return await fail('You have already used an affiliate discount.', 'affiliate_already_used');
+            }
+        } else {
+            // Same idea as above, scoped to just this one code (the general-coupon rule
+            // is per-code, not cross-code): the coupon-row FOR UPDATE lock above already
+            // serializes this against concurrent checkouts for the same code.
+            await client.query(
+                `UPDATE coupon_redemptions
+                 SET status = 'released', released_at = now()
+                 WHERE code = $1
+                   AND lower(email) = $2
+                   AND status = 'pending'
+                   AND created_at > now() - $3::interval`,
+                [normalizedCode, normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
+            );
+
+            const { rows: priorRows } = await client.query(
+                `SELECT 1 FROM coupon_redemptions
+                 WHERE code = $1
+                   AND lower(email) = $2
+                   AND status = 'paid'
+                 LIMIT 1`,
+                [normalizedCode, normalizedEmail]
+            );
+            if (priorRows.length > 0) {
+                return await fail('You have already used this coupon.', 'coupon_already_used');
+            }
         }
 
         if (couponRow.max_redemptions != null) {
@@ -259,12 +423,19 @@ async function abortCouponReservation(client) {
     }
 }
 
-/** Idempotently confirms a reservation as paid. Returns null if no matching pending row exists (already paid, or none was made). */
+/**
+ * Idempotently confirms a reservation as paid. Also promotes a 'released' row (freed up
+ * because the customer opened a newer checkout attempt that superseded it - see
+ * beginCouponReservation - or because an earlier payment.failed webhook released it) if
+ * this specific payment_reference's payment completes anyway: the customer genuinely
+ * paid for THAT checkout, so it must still be recorded as paid rather than silently
+ * dropped. Returns null if no matching row exists (already paid, or none was made).
+ */
 async function markReservationPaid({ paymentReference }) {
     const ref = String(paymentReference || '');
     if (!ref) return null;
     const { rows } = await pool.query(
-        `UPDATE coupon_redemptions SET status = 'paid', paid_at = now() WHERE payment_reference = $1 AND status = 'pending' RETURNING *`,
+        `UPDATE coupon_redemptions SET status = 'paid', paid_at = now() WHERE payment_reference = $1 AND status IN ('pending', 'released') RETURNING *`,
         [ref]
     );
     return rows[0] ? rowToRedemption(rows[0]) : null;
@@ -469,6 +640,8 @@ async function flagPartialRefund(orderId) {
 
 module.exports = {
     toCouponCode,
+    normalizeEmail,
+    COUPON_TYPES,
     listCoupons,
     findCoupon,
     upsertCoupon,

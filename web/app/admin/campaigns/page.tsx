@@ -1,44 +1,52 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
 
+type CampaignStats = {
+  paidCount: number;
+  pendingCount: number;
+  revenue: number;
+  discountTotal: number;
+  commissionTotal: number;
+};
+
+type AffiliateStat = {
+  affiliateId: string;
+  affiliateName: string;
+  affiliateEmail: string;
+  couponCode: string;
+  stats: CampaignStats;
+  statsByCurrency: Record<string, CampaignStats>;
+};
+
 type Campaign = {
   id: string;
   name: string;
   slug: string;
-  couponCode: string;
-  destinationUrl: string;
-  notes: string;
-  active: boolean;
-  link: string;
-  createdAt: string;
-  updatedAt: string;
-  affiliate: { id: string; firstName: string; lastName: string; email: string } | null;
   siteId: string | null;
   siteName: string | null;
   siteChannel: "local" | "global" | null;
-  stats: {
-    paidCount: number;
-    pendingCount: number;
-    revenue: number;
-    discountTotal: number;
-    commissionTotal: number;
-  };
-  // currency is the single currency involved in this campaign's redemptions, or null
-  // when it spans more than one (e.g. a legacy campaign with both LOCAL/PHP and
-  // GLOBAL/USD sales) - in that case `stats` above is a currency-mixed sum and
-  // statsByCurrency is the source of truth for display.
+  destinationUrl: string;
+  notes: string;
+  active: boolean;
+  linkTemplate: string;
+  createdAt?: string;
+  updatedAt?: string;
+  // stats/statsByCurrency mirror the campaign-sites and coupons pages' pattern:
+  // currency is the single currency involved, or null when the campaign spans more
+  // than one - in that case statsByCurrency is the source of truth for display.
+  stats: CampaignStats;
   currency: string | null;
-  statsByCurrency: Record<
-    string,
-    { paidCount: number; pendingCount: number; revenue: number; discountTotal: number; commissionTotal: number }
-  >;
+  statsByCurrency: Record<string, CampaignStats>;
+  affiliateStats: AffiliateStat[];
 };
+
+type Site = { id: string; name: string; url: string; channel: "local" | "global"; active: boolean };
 
 const TRACKING_SNIPPET = '<script src="https://api.nexistrydigitalsolutions.com/public/nx-ref.js" async></script>';
 
@@ -52,11 +60,14 @@ function money(value: number, currency = "PHP") {
 
 /** Renders a per-currency figure: a single formatted amount when the campaign has one
  * currency, or one line per currency when it's mixed (currency === null). */
-function moneyByCurrency(campaign: Campaign, field: "revenue" | "commissionTotal") {
-  if (campaign.currency) {
-    return money(campaign.stats[field], campaign.currency);
+function moneyByCurrency(
+  entity: { currency?: string | null; stats: CampaignStats; statsByCurrency: Record<string, CampaignStats> },
+  field: "revenue" | "commissionTotal"
+) {
+  if (entity.currency) {
+    return money(entity.stats[field], entity.currency);
   }
-  const entries = Object.entries(campaign.statsByCurrency);
+  const entries = Object.entries(entity.statsByCurrency);
   if (entries.length === 0) return money(0);
   return (
     <div className="space-y-0.5">
@@ -67,14 +78,9 @@ function moneyByCurrency(campaign: Campaign, field: "revenue" | "commissionTotal
   );
 }
 
-type Coupon = { code: string; active: boolean; affiliateEmail: string };
-
-type Site = { id: string; name: string; url: string; channel: "local" | "global"; active: boolean };
-
 const emptyForm = {
   name: "",
   slug: "",
-  couponCode: "",
   siteId: "",
   destinationUrl: "",
   notes: "",
@@ -86,7 +92,6 @@ export default function CampaignsPage() {
   const { message, toast } = useToast();
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -95,15 +100,12 @@ export default function CampaignsPage() {
   const [copiedSnippet, setCopiedSnippet] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const loadCampaigns = useCallback(async (key: string) => {
     const data = await apiFetch<{ campaigns: Campaign[] }>("/api/admin/campaigns", key);
     setCampaigns(data.campaigns || []);
-  }, []);
-
-  const loadCoupons = useCallback(async (key: string) => {
-    const data = await apiFetch<{ coupons: Coupon[] }>("/api/admin/coupons", key);
-    setCoupons(data.coupons || []);
   }, []);
 
   const loadSites = useCallback(async (key: string) => {
@@ -116,9 +118,10 @@ export default function CampaignsPage() {
     const key = requireAuth();
     if (!key) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
-    loadCampaigns(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
-    loadCoupons(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
-    loadSites(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    setLoading(true);
+    Promise.all([loadCampaigns(key), loadSites(key)])
+      .catch((e) => { if (!handleAuthError(e)) toast(e.message); })
+      .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load fns intentionally not deps to avoid refetch loops
   }, [ready]);
 
@@ -128,7 +131,6 @@ export default function CampaignsPage() {
     setForm({
       name: c?.name || "",
       slug: c?.slug || "",
-      couponCode: c?.couponCode || "",
       siteId: c?.siteId || "",
       destinationUrl: c?.destinationUrl || "",
       notes: c?.notes || "",
@@ -141,7 +143,6 @@ export default function CampaignsPage() {
     if (!key) return;
     try {
       await loadCampaigns(key);
-      await loadCoupons(key);
       await loadSites(key);
       toast("Refreshed.");
     } catch (e) {
@@ -189,7 +190,6 @@ export default function CampaignsPage() {
 
     const payload: Record<string, unknown> = {
       name: form.name.trim(),
-      couponCode: form.couponCode.trim().toUpperCase(),
       destinationUrl: form.destinationUrl.trim(),
       notes: form.notes,
       active: form.active === "true",
@@ -243,10 +243,10 @@ export default function CampaignsPage() {
     }
   }
 
-  async function copyLink(c: Campaign) {
+  async function copyLink(text: string, id: string) {
     try {
-      await navigator.clipboard.writeText(c.link);
-      setCopiedId(c.id);
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
       toast("Could not copy - select and copy the link manually.");
@@ -267,7 +267,7 @@ export default function CampaignsPage() {
     if (!search.trim()) return campaigns;
     const q = search.toLowerCase();
     return campaigns.filter((c) =>
-      `${c.name} ${c.slug} ${c.couponCode} ${c.destinationUrl} ${c.affiliate?.email || ""}`.toLowerCase().includes(q)
+      `${c.name} ${c.slug} ${c.destinationUrl} ${c.siteName || ""}`.toLowerCase().includes(q)
     );
   }, [campaigns, search]);
 
@@ -281,6 +281,12 @@ export default function CampaignsPage() {
         onLogout={logout}
       />
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-5 pb-16 pt-5">
+        <div className="rounded-2xl border border-white/10 bg-white/[.03] p-3.5 text-xs text-slate-300 shadow-2xl">
+          A campaign applies to <strong>all affiliates automatically</strong> — every affiliate gets their own
+          personal link (<code className="font-mono text-cyan-200">destination?ref=THEIR_CODE&amp;campaign={"{slug}"}</code>).
+          There is no per-campaign coupon to pick.
+        </div>
+
         <details className="group rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <summary className="cursor-pointer list-none p-3.5 text-xs font-bold uppercase tracking-wide text-slate-200">
             Install tracking on checkout pages
@@ -303,12 +309,14 @@ export default function CampaignsPage() {
           </div>
         </details>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.3fr_1fr]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Campaigns</h2>
             <div className="flex gap-2">
+              <label className="sr-only" htmlFor="campaign-search">Search campaigns</label>
               <input
+                id="campaign-search"
                 className="rounded-lg border border-white/10 bg-[#0c162ce6] px-3 py-2 text-sm outline-none focus:border-blue-400"
                 placeholder="Search campaigns…"
                 value={search}
@@ -324,98 +332,160 @@ export default function CampaignsPage() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-wide text-slate-400">
+                  <th className="p-2.5"></th>
                   <th className="p-2.5">Name</th>
-                  <th className="p-2.5">Affiliate</th>
-                  <th className="p-2.5">Coupon</th>
                   <th className="p-2.5">Site</th>
                   <th className="p-2.5">Sales</th>
                   <th className="p-2.5">Revenue</th>
                   <th className="p-2.5">Commission</th>
                   <th className="p-2.5">Destination</th>
-                  <th className="p-2.5">Link</th>
+                  <th className="p-2.5">Link template</th>
                   <th className="p-2.5">Active</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 && (
+                {loading && (
                   <tr>
-                    <td colSpan={10} className="p-3 text-slate-400">
-                      No campaigns yet. Create one to generate a shareable affiliate link.
+                    <td colSpan={9} className="p-3 text-slate-400">Loading campaigns…</td>
+                  </tr>
+                )}
+                {!loading && filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="p-3 text-slate-400">
+                      No campaigns yet. Create one to generate a shareable affiliate link template.
                     </td>
                   </tr>
                 )}
-                {filtered.map((c) => (
-                  <tr
-                    key={c.id}
-                    onClick={() => fillForm(c)}
-                    className={`cursor-pointer border-t border-white/10 hover:bg-white/[.03] ${
-                      selectedId === c.id ? "bg-blue-400/10" : ""
-                    }`}
-                  >
-                    <td className="p-2.5 font-bold">
-                      {c.name}
-                      <div className="font-mono text-[10px] text-slate-400">/{c.slug}</div>
-                    </td>
-                    <td className="p-2.5">
-                      {c.affiliate ? (
-                        <>
-                          {c.affiliate.firstName} {c.affiliate.lastName}
-                          <div className="text-slate-400">{c.affiliate.email}</div>
-                        </>
-                      ) : (
-                        <span className="text-slate-400">Unlinked</span>
-                      )}
-                    </td>
-                    <td className="p-2.5 font-mono">{c.couponCode}</td>
-                    <td className="p-2.5">
-                      {c.siteName ? (
-                        <>
-                          {c.siteName}
-                          <span className={`ml-1.5 rounded-full border px-1.5 py-0.5 text-[10px] ${c.siteChannel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
-                            {c.siteChannel === "global" ? "Global" : "Local"}
-                          </span>
-                        </>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="p-2.5">
-                      {c.stats.paidCount}
-                      {c.stats.pendingCount > 0 && (
-                        <span className="ml-1 text-[10px] text-slate-400">+{c.stats.pendingCount} pending</span>
-                      )}
-                    </td>
-                    <td className="p-2.5">{moneyByCurrency(c, "revenue")}</td>
-                    <td className="p-2.5">{moneyByCurrency(c, "commissionTotal")}</td>
-                    <td className="max-w-[160px] truncate p-2.5" title={c.destinationUrl}>
-                      {c.destinationUrl}
-                    </td>
-                    <td className="p-2.5">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          copyLink(c);
-                        }}
-                        className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-bold hover:bg-white/10"
-                      >
-                        {copiedId === c.id ? "Copied!" : "Copy Link"}
-                      </button>
-                    </td>
-                    <td className="p-2.5">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleToggleActive(c);
-                        }}
-                        className={`rounded-full border px-2.5 py-1 text-[11px] ${
-                          c.active ? "border-emerald-400/40 text-emerald-200" : "border-red-400/40 text-red-200"
+                {filtered.map((c) => {
+                  const isExpanded = expandedId === c.id;
+                  return (
+                    <Fragment key={c.id}>
+                      <tr
+                        onClick={() => fillForm(c)}
+                        className={`cursor-pointer border-t border-white/10 hover:bg-white/[.03] ${
+                          selectedId === c.id ? "bg-blue-400/10" : ""
                         }`}
                       >
-                        {c.active ? "Active" : "Inactive"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                        <td className="p-2.5">
+                          <button
+                            type="button"
+                            aria-expanded={isExpanded}
+                            aria-controls={`campaign-breakdown-${c.id}`}
+                            aria-label={isExpanded ? `Collapse per-affiliate breakdown for ${c.name}` : `Expand per-affiliate breakdown for ${c.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedId(isExpanded ? null : c.id);
+                            }}
+                            className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-bold hover:bg-white/10"
+                          >
+                            {isExpanded ? "▾" : "▸"}
+                          </button>
+                        </td>
+                        <td className="p-2.5 font-bold">
+                          {c.name}
+                          <div className="font-mono text-[10px] text-slate-400">/{c.slug}</div>
+                        </td>
+                        <td className="p-2.5">
+                          {c.siteName ? (
+                            <>
+                              {c.siteName}
+                              <span className={`ml-1.5 rounded-full border px-1.5 py-0.5 text-[10px] ${c.siteChannel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
+                                {c.siteChannel === "global" ? "Global" : "Local"}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="p-2.5">
+                          {c.stats.paidCount}
+                          {c.stats.pendingCount > 0 && (
+                            <span className="ml-1 text-[10px] text-slate-400">+{c.stats.pendingCount} pending</span>
+                          )}
+                        </td>
+                        <td className="p-2.5">{moneyByCurrency(c, "revenue")}</td>
+                        <td className="p-2.5">{moneyByCurrency(c, "commissionTotal")}</td>
+                        <td className="max-w-[160px] truncate p-2.5" title={c.destinationUrl}>
+                          {c.destinationUrl}
+                        </td>
+                        <td className="p-2.5">
+                          <div className="flex items-center gap-1.5">
+                            <code className="max-w-[140px] truncate font-mono text-[10px] text-cyan-200" title={c.linkTemplate}>
+                              {c.linkTemplate}
+                            </code>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                copyLink(c.linkTemplate, c.id);
+                              }}
+                              className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-bold hover:bg-white/10"
+                            >
+                              {copiedId === c.id ? "Copied!" : "Copy"}
+                            </button>
+                          </div>
+                        </td>
+                        <td className="p-2.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleActive(c);
+                            }}
+                            className={`rounded-full border px-2.5 py-1 text-[11px] ${
+                              c.active ? "border-emerald-400/40 text-emerald-200" : "border-red-400/40 text-red-200"
+                            }`}
+                          >
+                            {c.active ? "Active" : "Inactive"}
+                          </button>
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr id={`campaign-breakdown-${c.id}`} className="border-t border-white/5 bg-[#0a122480]">
+                          <td colSpan={9} className="p-3">
+                            <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                              Per-affiliate breakdown
+                            </div>
+                            {c.affiliateStats.length === 0 ? (
+                              <p className="text-xs text-slate-400">No affiliate activity on this campaign yet.</p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
+                                      <th className="p-1.5">Affiliate</th>
+                                      <th className="p-1.5">Code</th>
+                                      <th className="p-1.5">Sales</th>
+                                      <th className="p-1.5">Revenue</th>
+                                      <th className="p-1.5">Commission</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {c.affiliateStats.map((a) => (
+                                      <tr key={a.affiliateId} className="border-t border-white/5">
+                                        <td className="p-1.5">
+                                          {a.affiliateName}
+                                          <div className="text-slate-500">{a.affiliateEmail}</div>
+                                        </td>
+                                        <td className="p-1.5 font-mono">{a.couponCode}</td>
+                                        <td className="p-1.5">
+                                          {a.stats.paidCount}
+                                          {a.stats.pendingCount > 0 && (
+                                            <span className="ml-1 text-[10px] text-slate-500">+{a.stats.pendingCount} pending</span>
+                                          )}
+                                        </td>
+                                        <td className="p-1.5">{moneyByCurrency(a, "revenue")}</td>
+                                        <td className="p-1.5">{moneyByCurrency(a, "commissionTotal")}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -446,18 +516,6 @@ export default function CampaignsPage() {
                 onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase() })}
               />
             </Field>
-            <Field label="Affiliate / Coupon">
-              <select className="input" required value={form.couponCode} onChange={(e) => setForm({ ...form, couponCode: e.target.value })}>
-                <option value="">Select a coupon…</option>
-                {coupons.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.code}
-                    {c.affiliateEmail ? ` · ${c.affiliateEmail}` : ""}
-                    {!c.active ? " (inactive)" : ""}
-                  </option>
-                ))}
-              </select>
-            </Field>
             <Field label="Site" hint="Only active sites are shown. The destination URL below is prefilled from the site's URL.">
               <select
                 className="input"
@@ -474,7 +532,7 @@ export default function CampaignsPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Destination URL" hint="Must be on the selected site's host. ref/campaign params are added automatically.">
+            <Field label="Destination URL" hint="Must be on the selected site's host. ref/campaign params are added automatically per affiliate.">
               <input
                 className="input"
                 type="url"
@@ -499,14 +557,14 @@ export default function CampaignsPage() {
               </select>
             </Field>
 
-            {form.destinationUrl && form.couponCode && !urlError && (
+            {form.destinationUrl && !urlError && (
               <div className="rounded-xl border border-white/10 bg-[#0c162c66] p-3">
-                <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">Link preview</div>
+                <div className="mb-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">Link template preview</div>
                 <div className="break-all font-mono text-xs text-cyan-200">
                   {(() => {
                     try {
                       const u = new URL(form.destinationUrl);
-                      u.searchParams.set("ref", form.couponCode.toUpperCase());
+                      u.searchParams.set("ref", "{CODE}");
                       u.searchParams.set("campaign", form.slug ? form.slug.toLowerCase() : "(auto-slug)");
                       return u.toString();
                     } catch {
@@ -514,6 +572,9 @@ export default function CampaignsPage() {
                     }
                   })()}
                 </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {"{CODE}"} is replaced with each affiliate&apos;s own coupon code on their dashboard.
+                </p>
               </div>
             )}
 

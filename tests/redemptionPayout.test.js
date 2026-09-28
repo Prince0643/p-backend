@@ -14,11 +14,15 @@ after(async () => {
     await pool.end();
 });
 
-async function paidRedemption({ code, paymentReference, baseAmount = 100, affiliateFeeAmount = 10, currency = 'PHP' }) {
-    const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID });
+// Each call defaults to a distinct customer email (derived from paymentReference) - the
+// once-per-customer coupon rules would otherwise block a second redemption of the same
+// code for tests that intentionally create two paid redemptions on one coupon.
+async function paidRedemption({ code, paymentReference, baseAmount = 100, affiliateFeeAmount = 10, currency = 'PHP', email }) {
+    const customerEmail = email || `payout-test.${paymentReference}@example.com`;
+    const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID, email: customerEmail });
     assert.ok(reservation.coupon, `expected reservation to succeed: ${reservation.error}`);
     await couponStore.finalizeCouponReservation(reservation.client, {
-        code, paymentReference, productId: PRODUCT_ID, email: 'payout-test@example.com', fullName: 'Payout Test',
+        code, paymentReference, productId: PRODUCT_ID, email: customerEmail, fullName: 'Payout Test',
         baseAmount, discountAmount: 0, affiliateFeeAmount, currency
     });
     return couponStore.markReservationPaid({ paymentReference });
@@ -53,10 +57,10 @@ test('markRedemptionsPaid only sets affiliate_paid_at, never touches status', as
 test('markRedemptionsPaid skips a redemption whose customer payment never completed (status pending)', async () => {
     const code = await createTestCoupon({ discountPercent: 0.1, affiliateFeePercent: 0.1, maxRedemptions: null });
     try {
-        const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID });
+        const reservation = await couponStore.beginCouponReservation({ code, productId: PRODUCT_ID, email: 'payout-test-pending@example.com' });
         const paymentReference = `PAYOUT${Date.now()}B`;
         const pending = await couponStore.finalizeCouponReservation(reservation.client, {
-            code, paymentReference, productId: PRODUCT_ID, baseAmount: 100, discountAmount: 0, affiliateFeeAmount: 10, currency: 'PHP'
+            code, paymentReference, productId: PRODUCT_ID, email: 'payout-test-pending@example.com', baseAmount: 100, discountAmount: 0, affiliateFeeAmount: 10, currency: 'PHP'
         });
         assert.equal(pending.status, 'pending');
 

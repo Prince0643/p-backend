@@ -135,7 +135,8 @@ exports.createPaymentIntent = async (req, res) => {
         if (effectivePromoCode) {
             const reservation = await couponStore.beginCouponReservation({
                 code: effectivePromoCode,
-                productId: catalogProduct.id
+                productId: catalogProduct.id,
+                email
             });
             if (!reservation.coupon) {
                 if (isExplicitlyTypedPromoCode) {
@@ -158,22 +159,32 @@ exports.createPaymentIntent = async (req, res) => {
         const baseAmount = Number(taxed.baseAmount.toFixed(2));
         const taxAmount = Number(taxed.taxAmount.toFixed(2));
 
-        // Attribute this checkout to a campaign link only once we know which coupon (if
-        // any) actually got applied: the campaign's coupon_code must match the applied
-        // coupon, the campaign must exist and be active. A slug alone is never enough.
+        // Full (undiscounted) catalog price, taxed the same way as the actual checkout
+        // amount above. Recurring renewals bill at this full price (the discount only
+        // ever applies to the first payment) - stashed in payment metadata below so the
+        // GHL invoice schedule created after payment.paid can use it instead of the
+        // (possibly discounted) amount actually charged today.
+        const fullPriceTaxed = calculateTaxedAmount(productInfo.amount, taxRate);
+        const fullPriceAmount = Number(fullPriceTaxed.totalAmount.toFixed(2));
+
+        // Attribute this checkout to a campaign link only once we know an AFFILIATE
+        // coupon actually got applied (general coupons used via an affiliate link earn no
+        // affiliate credit, so they must never attribute a campaign either) - the
+        // campaign must also exist and be active. A slug alone is never enough. Campaigns
+        // no longer carry their own coupon code: one campaign applies to every affiliate.
         let campaignId = null;
         const normalizedCampaignSlug = campaign ? String(campaign).trim() : '';
         if (normalizedCampaignSlug) {
             if (!appliedCoupon) {
                 console.log('Campaign attribution skipped: no coupon was applied for slug', normalizedCampaignSlug);
+            } else if (appliedCoupon.type !== 'affiliate') {
+                console.log('Campaign attribution skipped: applied coupon is not an affiliate coupon:', normalizedCampaignSlug);
             } else {
                 const matchedCampaign = await campaignStore.findCampaignBySlug(normalizedCampaignSlug);
                 if (!matchedCampaign) {
                     console.log('Campaign attribution skipped: slug not found:', normalizedCampaignSlug);
                 } else if (!matchedCampaign.active) {
                     console.log('Campaign attribution skipped: campaign inactive:', normalizedCampaignSlug);
-                } else if (couponStore.toCouponCode(matchedCampaign.couponCode) !== couponStore.toCouponCode(appliedCoupon.code)) {
-                    console.log('Campaign attribution skipped: campaign coupon does not match applied coupon:', normalizedCampaignSlug);
                 } else {
                     campaignId = matchedCampaign.id;
                 }
@@ -241,6 +252,11 @@ exports.createPaymentIntent = async (req, res) => {
             // ADD: Discount information (server-computed, not client-trusted)
             discountAmount: String(serverDiscountAmount || 0),
             promoCode: String(appliedCoupon?.code || ''),
+
+            // Full (undiscounted, taxed) price - used to bill recurring renewals at full
+            // price even when the first payment was discounted (see the GHL invoice
+            // schedule creation in handlePaymentSuccess below).
+            fullPriceAmount: String(fullPriceAmount),
 
             // Campaign attribution (checkout auto-attribution via nx-ref.js)
             campaignId: String(campaignId || ''),
@@ -847,6 +863,12 @@ async function handlePaymentSuccess(attributes) {
                             }
                             const startAt = start.toISOString().slice(0, 10);
 
+                            // Renewals always bill at the product's FULL (undiscounted)
+                            // price - a coupon only ever discounts the first payment.
+                            // Falls back to the actual charged `amount` only if the
+                            // checkout predates fullPriceAmount being stashed in metadata.
+                            const renewalAmount = Number(metadata.fullPriceAmount) || amount;
+
                             const schedule = await ghlService.createInvoiceSchedule({
                                 contactId,
                                 contactDetails: {
@@ -864,7 +886,7 @@ async function handlePaymentSuccess(attributes) {
                                         name: String(catalogProduct.name),
                                         description: metadata.paymentReference ? `Ref: ${metadata.paymentReference}` : undefined,
                                         currency: String(currency).toUpperCase(),
-                                        amount,
+                                        amount: renewalAmount,
                                         qty: 1,
                                         type: 'recurring'
                                     }

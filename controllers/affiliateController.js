@@ -34,14 +34,17 @@ exports.register = async (req, res) => {
 
         const couponCode = await generateUniqueCouponCode();
 
-        // One-time-use: this code is meant to be shared with exactly one customer.
+        // Unlimited total redemptions - any number of DIFFERENT customers may use this
+        // code (the per-customer-once rule is enforced across ALL affiliate codes at
+        // checkout time, in couponStore.beginCouponReservation, not via maxRedemptions).
         await couponStore.upsertCoupon({
             code: couponCode,
+            type: 'affiliate',
             discountPercent: AFFILIATE_DISCOUNT_PERCENT,
             affiliateFeePercent: AFFILIATE_FEE_PERCENT,
             affiliateEmail: normalized.email,
             active: true,
-            maxRedemptions: 1,
+            maxRedemptions: null,
             productIds: [],
             notes: `Auto-generated for affiliate ${normalized.firstName} ${normalized.lastName} (${normalized.email}) on registration`
         });
@@ -54,7 +57,7 @@ exports.register = async (req, res) => {
                     name: `${normalized.firstName} ${normalized.lastName} Affiliate`,
                     code: couponCode,
                     discountPercent: AFFILIATE_DISCOUNT_PERCENT,
-                    maxRedemptions: 1
+                    maxRedemptions: null
                 });
                 console.log('GHL affiliate coupon created:', ghlCoupon?._id || ghlCoupon?.id || couponCode);
             } catch (ghlErr) {

@@ -7,6 +7,7 @@ router.use(requireAdminAuth);
 
 router.get('/coupons', adminCouponsController.list);
 router.get('/coupons/ghl', adminCouponsController.listGhlCoupons);
+router.get('/coupons/ghl-locations', adminCouponsController.listGhlLocations);
 router.post('/coupons/ghl/sync', adminCouponsController.syncGhlCoupons);
 router.get('/coupons/redemptions', adminCouponsController.listRedemptions);
 router.post('/coupons/redemptions/mark-paid', adminCouponsController.markRedemptionsPaid);

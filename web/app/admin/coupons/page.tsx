@@ -7,11 +7,17 @@ import { apiFetch } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
 
+type CouponType = "affiliate" | "general";
+
 type Coupon = {
   code: string;
+  type: CouponType;
   discountPercent: number;
   affiliateFeePercent: number;
   affiliateEmail: string;
+  affiliate: { id: string; name: string; email: string } | null;
+  ghlLocationIds: string[] | null;
+  localEnabled: boolean;
   active: boolean;
   expiresAt: string | null;
   productIds: string[];
@@ -46,6 +52,13 @@ type ImportOrdersSummary = {
   flagged: number;
   skipped: { noCoupon: number; invoice: number; unknownCode: number; noAffiliate: number; test: number };
   errors: unknown[];
+};
+
+// POST /api/admin/coupons/ghl/import-orders returns these fields at the TOP LEVEL
+// (not nested under `summary`), but we tolerate a `summary` wrapper defensively.
+type ImportOrdersResponse = Partial<ImportOrdersSummary> & {
+  success?: boolean;
+  summary?: Partial<ImportOrdersSummary>;
 };
 
 function money(value: number, currency: string) {
@@ -88,14 +101,46 @@ type GhlCouponError = {
   error: string;
 };
 
+type GhlLocation = { locationId: string; name: string };
+
+// One row per coupon PER LOCATION (services/ghlService.js syncCouponsToGhlLocations).
+type GhlSyncAction =
+  | "would_create"
+  | "would_update"
+  | "created"
+  | "updated"
+  | "unchanged"
+  | "error"
+  | "skipped_inactive";
+
+type GhlSyncResultRow = {
+  locationName?: string;
+  locationId?: string;
+  code: string;
+  action: GhlSyncAction;
+  note?: "not_syncable_status" | null;
+  error?: string;
+  ghlCouponId?: string | null;
+};
+
 type GhlSyncSummary = {
   locations: number;
   localCoupons: number;
   activeCoupons: number;
   created: number;
-  skippedExisting: number;
+  updated: number;
+  unchanged: number;
+  wouldCreate: number;
+  wouldUpdate: number;
+  notSyncable: number;
   skippedInactive: number;
   errors: number;
+  dryRun: boolean;
+};
+
+type GhlSyncResponse = {
+  summary: GhlSyncSummary;
+  results: GhlSyncResultRow[];
 };
 
 const emptyForm = {
@@ -108,6 +153,9 @@ const emptyForm = {
   productIds: "",
   active: "true",
   notes: "",
+  localEnabled: "true",
+  ghlAllLocations: "true",
+  ghlLocationIds: [] as string[],
 };
 
 function toLocalDatetimeValue(iso: string | null) {
@@ -124,8 +172,13 @@ export default function CouponsPage() {
 
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState<"" | CouponType>("");
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const [selectedCoupon, setSelectedCoupon] = useState<Coupon | null>(null);
   const [form, setForm] = useState(emptyForm);
+
+  const [ghlLocations, setGhlLocations] = useState<GhlLocation[]>([]);
+  const [loadingGhlLocations, setLoadingGhlLocations] = useState(false);
 
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
@@ -137,12 +190,29 @@ export default function CouponsPage() {
   const [ghlStatusFilter, setGhlStatusFilter] = useState("");
   const [ghlSearch, setGhlSearch] = useState("");
   const [loadingGhlCoupons, setLoadingGhlCoupons] = useState(false);
+  const [dryRunningSync, setDryRunningSync] = useState(false);
   const [syncingGhlCoupons, setSyncingGhlCoupons] = useState(false);
-  const [ghlSyncSummary, setGhlSyncSummary] = useState<GhlSyncSummary | null>(null);
+  const [ghlSyncPlan, setGhlSyncPlan] = useState<GhlSyncResponse | null>(null);
+  const [ghlSyncResult, setGhlSyncResult] = useState<GhlSyncResponse | null>(null);
 
-  const loadCoupons = useCallback(async (key: string) => {
-    const data = await apiFetch<{ coupons: Coupon[] }>("/api/admin/coupons", key);
+  const loadCoupons = useCallback(async (key: string, type: "" | CouponType) => {
+    const params = new URLSearchParams();
+    if (type) params.set("type", type);
+    const data = await apiFetch<{ coupons: Coupon[] }>(
+      `/api/admin/coupons${params.toString() ? `?${params}` : ""}`,
+      key
+    );
     setCoupons(data.coupons || []);
+  }, []);
+
+  const loadGhlLocations = useCallback(async (key: string) => {
+    setLoadingGhlLocations(true);
+    try {
+      const data = await apiFetch<{ locations: GhlLocation[] }>("/api/admin/coupons/ghl-locations", key);
+      setGhlLocations(data.locations || []);
+    } finally {
+      setLoadingGhlLocations(false);
+    }
   }, []);
 
   const loadRedemptions = useCallback(async (key: string, code: string | null, status: string, payout: string) => {
@@ -174,7 +244,8 @@ export default function CouponsPage() {
     const key = requireAuth();
     if (!key) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
-    loadCoupons(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    loadCoupons(key, typeFilter).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    loadGhlLocations(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
     loadRedemptions(key, null, "", "").catch((e) => { if (!handleAuthError(e)) toast(e.message); });
     setLoadingGhlCoupons(true);
     loadGhlCoupons(key, "", "")
@@ -183,8 +254,19 @@ export default function CouponsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load fns intentionally not deps to avoid refetch loops
   }, [ready]);
 
+  useEffect(() => {
+    if (!ready) return;
+    const key = requireAuth();
+    if (!key) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- refetch when the filter changes
+    loadCoupons(key, typeFilter).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load fns intentionally not deps to avoid refetch loops
+  }, [typeFilter]);
+
   function fillForm(c: Coupon | null) {
     setSelectedCode(c?.code || null);
+    setSelectedCoupon(c);
+    setGhlSyncPlan(null);
     setForm({
       code: c?.code || "",
       discountPercent: c ? String(Number((c.discountPercent * 100).toFixed(4))) : "",
@@ -195,6 +277,9 @@ export default function CouponsPage() {
       productIds: (c?.productIds || []).join(", "),
       active: c ? String(!!c.active) : "true",
       notes: c?.notes || "",
+      localEnabled: c ? String(!!c.localEnabled) : "true",
+      ghlAllLocations: c ? String(c.ghlLocationIds === null) : "true",
+      ghlLocationIds: c?.ghlLocationIds || [],
     });
   }
 
@@ -202,7 +287,8 @@ export default function CouponsPage() {
     const key = requireAuth();
     if (!key) return;
     try {
-      await loadCoupons(key);
+      await loadCoupons(key, typeFilter);
+      await loadGhlLocations(key);
       await loadRedemptions(key, selectedCode, statusFilter, payoutFilter);
       await loadGhlCoupons(key, ghlStatusFilter, ghlSearch);
       toast("Refreshed.");
@@ -211,16 +297,26 @@ export default function CouponsPage() {
     }
   }
 
+  function toggleGhlLocation(locationId: string) {
+    setForm((f) => {
+      const has = f.ghlLocationIds.includes(locationId);
+      return {
+        ...f,
+        ghlLocationIds: has ? f.ghlLocationIds.filter((id) => id !== locationId) : [...f.ghlLocationIds, locationId],
+      };
+    });
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const key = requireAuth();
     if (!key) return;
 
-    const payload = {
+    const isAffiliateCoupon = selectedCoupon?.type === "affiliate";
+
+    const payload: Record<string, unknown> = {
       code: form.code.trim().toUpperCase(),
       discountPercent: Number(form.discountPercent) / 100,
-      affiliateFeePercent: form.affiliateFeePercent ? Number(form.affiliateFeePercent) / 100 : 0,
-      affiliateEmail: form.affiliateEmail,
       expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
       maxRedemptions: form.maxRedemptions ? Number(form.maxRedemptions) : null,
       productIds: form.productIds.split(",").map((s) => s.trim()).filter(Boolean),
@@ -228,14 +324,23 @@ export default function CouponsPage() {
       notes: form.notes,
     };
 
+    if (!isAffiliateCoupon) {
+      // General coupons: no affiliate fee/email, but local checkout + GHL location scoping apply.
+      payload.affiliateFeePercent = 0;
+      payload.affiliateEmail = "";
+      payload.localEnabled = form.localEnabled === "true";
+      payload.ghlLocationIds = form.ghlAllLocations === "true" ? null : form.ghlLocationIds;
+      if (!selectedCode) payload.type = "general";
+    }
+
     try {
       const method = selectedCode ? "PUT" : "POST";
       const path = selectedCode
-        ? `/api/admin/coupons/${encodeURIComponent(payload.code)}`
+        ? `/api/admin/coupons/${encodeURIComponent(payload.code as string)}`
         : "/api/admin/coupons";
       const data = await apiFetch<{ coupon: Coupon }>(path, key, { method, body: payload });
       toast("Saved.");
-      await loadCoupons(key);
+      await loadCoupons(key, typeFilter);
       fillForm(data.coupon);
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
@@ -251,7 +356,7 @@ export default function CouponsPage() {
       await apiFetch(`/api/admin/coupons/${encodeURIComponent(selectedCode)}`, key, { method: "DELETE" });
       toast("Deleted.");
       fillForm(null);
-      await loadCoupons(key);
+      await loadCoupons(key, typeFilter);
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
     }
@@ -282,16 +387,33 @@ export default function CouponsPage() {
     }
   }
 
-  async function handleSyncGhlCoupons() {
-    if (!confirm("Sync every active local coupon code to every configured GHL location? Existing GHL codes will be skipped.")) return;
+  async function handleDryRunSync() {
+    const key = requireAuth();
+    if (!key) return;
+    setDryRunningSync(true);
+    setGhlSyncResult(null);
+    try {
+      const data = await apiFetch<GhlSyncResponse>("/api/admin/coupons/ghl/sync?dryRun=1", key, { method: "POST" });
+      setGhlSyncPlan(data);
+      toast("Dry run complete - review the plan below before applying.");
+    } catch (e) {
+      if (!handleAuthError(e)) toast((e as Error).message);
+    } finally {
+      setDryRunningSync(false);
+    }
+  }
+
+  async function handleConfirmSync() {
+    if (!confirm("Apply this sync plan? This will create and update GHL coupons in every listed location.")) return;
     const key = requireAuth();
     if (!key) return;
     setSyncingGhlCoupons(true);
     try {
-      const data = await apiFetch<{ summary: GhlSyncSummary }>("/api/admin/coupons/ghl/sync", key, { method: "POST" });
-      setGhlSyncSummary(data.summary);
+      const data = await apiFetch<GhlSyncResponse>("/api/admin/coupons/ghl/sync", key, { method: "POST" });
+      setGhlSyncResult(data);
+      setGhlSyncPlan(null);
       await loadGhlCoupons(key, ghlStatusFilter, ghlSearch);
-      toast(`GHL sync complete: ${data.summary.created} created, ${data.summary.skippedExisting} already existed.`);
+      toast("GHL sync applied.");
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
     } finally {
@@ -337,14 +459,18 @@ export default function CouponsPage() {
     if (!key) return;
     setImportingOrders(true);
     try {
-      const data = await apiFetch<{ summary: ImportOrdersSummary }>("/api/admin/coupons/ghl/import-orders", key, {
+      const data = await apiFetch<ImportOrdersResponse>("/api/admin/coupons/ghl/import-orders", key, {
         method: "POST",
         body: {},
       });
-      const s = data.summary;
+      // The endpoint returns these fields at the top level, but tolerate a
+      // `summary` wrapper too in case that ever changes.
+      const s = data.summary || data;
+      const errorCount = s.errors?.length ?? 0;
       toast(
-        `Imported ${s.imported} of ${s.scanned} scanned` +
-          `${s.refunded ? `, ${s.refunded} refunded` : ""}${s.flagged ? `, ${s.flagged} flagged` : ""}.`
+        `Imported ${s.imported ?? 0} of ${s.scanned ?? 0} scanned` +
+          `${s.refunded ? `, ${s.refunded} refunded` : ""}${s.flagged ? `, ${s.flagged} flagged` : ""}` +
+          `${errorCount ? `, ${errorCount} error${errorCount === 1 ? "" : "s"}` : ""}.`
       );
       await loadRedemptions(key, selectedCode, statusFilter, payoutFilter);
     } catch (e) {
@@ -357,10 +483,124 @@ export default function CouponsPage() {
   const filtered = coupons.filter((c) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
-    return c.code.toLowerCase().includes(q) || c.affiliateEmail.toLowerCase().includes(q);
+    return (
+      c.code.toLowerCase().includes(q) ||
+      c.affiliateEmail.toLowerCase().includes(q) ||
+      (c.affiliate?.name || "").toLowerCase().includes(q)
+    );
   });
 
   const affiliateLinkedCount = ghlCoupons.filter((c) => c.affiliate).length;
+  const isAffiliateCoupon = selectedCoupon?.type === "affiliate";
+
+  const ACTION_LABELS: Record<GhlSyncAction, string> = {
+    would_create: "Would create",
+    would_update: "Would update",
+    created: "Created",
+    updated: "Updated",
+    unchanged: "Unchanged",
+    error: "Error",
+    skipped_inactive: "Skipped (inactive)",
+  };
+
+  const ACTION_STYLES: Record<GhlSyncAction, string> = {
+    would_create: "border-emerald-400/40 text-emerald-200",
+    would_update: "border-amber-400/40 text-amber-200",
+    created: "border-emerald-400/40 text-emerald-200",
+    updated: "border-amber-400/40 text-amber-200",
+    unchanged: "border-white/15 text-slate-300",
+    error: "border-red-400/40 text-red-200",
+    skipped_inactive: "border-white/10 text-slate-500",
+  };
+
+  function renderSyncPlan(plan: GhlSyncResponse, title: string) {
+    const s = plan.summary;
+    const rows = plan.results || [];
+    // Group rows by location so admins can scan changes per GHL location.
+    const byLocation = new Map<string, GhlSyncResultRow[]>();
+    for (const r of rows) {
+      const key = r.locationId || r.locationName || "unassigned";
+      if (!byLocation.has(key)) byLocation.set(key, []);
+      byLocation.get(key)!.push(r);
+    }
+
+    return (
+      <div className="m-3.5 rounded-xl border border-blue-300/20 bg-blue-300/10 p-3 text-xs text-blue-100">
+        <div className="mb-2 font-bold uppercase tracking-wide text-blue-200">{title}</div>
+        {s && (
+          <div className="mb-2 grid gap-2 sm:grid-cols-5">
+            {s.dryRun ? (
+              <>
+                <Metric label="Would create" value={s.wouldCreate ?? 0} />
+                <Metric label="Would update" value={s.wouldUpdate ?? 0} />
+                <Metric label="Unchanged" value={s.unchanged ?? 0} />
+                <Metric label="Not syncable" value={s.notSyncable ?? 0} />
+                <Metric label="Errors" value={s.errors ?? 0} />
+              </>
+            ) : (
+              <>
+                <Metric label="Created" value={s.created ?? 0} />
+                <Metric label="Updated" value={s.updated ?? 0} />
+                <Metric label="Unchanged" value={s.unchanged ?? 0} />
+                <Metric label="Not syncable" value={s.notSyncable ?? 0} />
+                <Metric label="Errors" value={s.errors ?? 0} />
+              </>
+            )}
+          </div>
+        )}
+
+        {s && s.errors > 0 && (
+          <div className="mb-2 rounded-lg border border-red-400/30 bg-red-400/10 p-2 font-bold text-red-200">
+            {s.errors} coupon{s.errors === 1 ? "" : "s"} could not be synced - see the Error rows below.
+          </div>
+        )}
+
+        {rows.length === 0 ? (
+          <p className="text-blue-200/70">No coupons to sync.</p>
+        ) : (
+          <div className="space-y-3">
+            {Array.from(byLocation.entries()).map(([locKey, locRows]) => (
+              <div key={locKey} className="overflow-x-auto rounded-lg border border-blue-300/10">
+                <div className="border-b border-blue-300/10 bg-blue-300/5 px-2 py-1 font-bold text-blue-100">
+                  {locRows[0].locationName || locRows[0].locationId || "Inactive coupons (no location)"}
+                </div>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-[10px] uppercase tracking-wide text-blue-200/70">
+                      <th className="p-1.5">Code</th>
+                      <th className="p-1.5">Action</th>
+                      <th className="p-1.5">Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {locRows.map((r, i) => (
+                      <tr key={`${r.code}-${i}`} className="border-t border-blue-300/10">
+                        <td className="p-1.5 font-mono">{r.code}</td>
+                        <td className="p-1.5">
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] ${ACTION_STYLES[r.action]}`}>
+                            {ACTION_LABELS[r.action]}
+                          </span>
+                        </td>
+                        <td className="p-1.5">
+                          {r.action === "error" && r.error ? (
+                            <span className="text-red-200">{r.error}</span>
+                          ) : r.note === "not_syncable_status" ? (
+                            <span className="text-amber-200">Status differs in GHL - change it in GHL.</span>
+                          ) : (
+                            <span className="text-blue-200/50">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-1 flex-col">
@@ -373,15 +613,28 @@ export default function CouponsPage() {
       />
       <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 pb-28 pt-5 lg:grid-cols-[1fr_1.2fr]">
         <section className="flex flex-col rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Coupons</h2>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <label className="sr-only" htmlFor="coupon-search">Search coupons</label>
               <input
+                id="coupon-search"
                 className="rounded-lg border border-white/10 bg-[#0c162ce6] px-3 py-2 text-sm outline-none focus:border-blue-400"
                 placeholder="Search coupons…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
+              <label className="sr-only" htmlFor="coupon-type-filter">Filter by coupon type</label>
+              <select
+                id="coupon-type-filter"
+                className="input w-auto"
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as "" | CouponType)}
+              >
+                <option value="">All types</option>
+                <option value="affiliate">Affiliate</option>
+                <option value="general">General</option>
+              </select>
               <button onClick={() => fillForm(null)} className="rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm font-extrabold text-slate-950">
                 New Coupon
               </button>
@@ -403,12 +656,26 @@ export default function CouponsPage() {
                 }`}
               >
                 <div>
-                  <div className="font-extrabold">{c.code}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold">{c.code}</span>
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] ${
+                        c.type === "affiliate" ? "border-purple-400/40 text-purple-200" : "border-cyan-400/40 text-cyan-200"
+                      }`}
+                    >
+                      {c.type === "affiliate" ? "Affiliate" : "General"}
+                    </span>
+                  </div>
                   <div className="mt-1 text-xs text-slate-400">
                     {(c.discountPercent * 100).toFixed(0)}% off
                     {c.affiliateFeePercent ? ` · ${(c.affiliateFeePercent * 100).toFixed(0)}% affiliate fee` : ""} ·{" "}
                     {c.expiresAt ? `expires ${new Date(c.expiresAt).toLocaleString()}` : "no expiry"}
                   </div>
+                  {c.affiliate && (
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {c.affiliate.name || c.affiliate.email} · {c.affiliate.email}
+                    </div>
+                  )}
                 </div>
                 <div className={`rounded-full border px-2.5 py-1 text-xs ${c.active ? "border-emerald-400/40 text-emerald-200" : "border-red-400/40 text-red-200"}`}>
                   {c.active ? "Active" : "Inactive"}
@@ -430,28 +697,44 @@ export default function CouponsPage() {
             )}
           </div>
 
+          {isAffiliateCoupon && (
+            <div className="m-4 rounded-xl border border-purple-300/25 bg-purple-300/10 p-3 text-xs text-purple-100">
+              <div className="font-bold uppercase tracking-wide text-purple-200">Affiliate coupon</div>
+              <p className="mt-1">
+                Affiliate codes are created automatically at registration; they carry the affiliate&apos;s fee, allow
+                unlimited customers, but each customer can use an affiliate discount only once ever — across all
+                affiliate codes.
+              </p>
+              {selectedCoupon?.affiliate && (
+                <p className="mt-2 font-semibold text-purple-50">
+                  Linked to: {selectedCoupon.affiliate.name || selectedCoupon.affiliate.email} ({selectedCoupon.affiliate.email})
+                </p>
+              )}
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
             <Field label="Code" hint="Uppercased automatically. Letters, numbers, - and _ only, up to 50 characters.">
-              <input className="input uppercase" required maxLength={50} value={form.code}
+              <input className="input uppercase" required maxLength={50} disabled={isAffiliateCoupon} value={form.code}
                 onChange={(e) => setForm({ ...form, code: e.target.value })} />
             </Field>
             <Field label="Discount %">
               <input className="input" type="number" min={0} max={100} step="0.01" required value={form.discountPercent}
                 onChange={(e) => setForm({ ...form, discountPercent: e.target.value })} />
             </Field>
-            <Field label="Affiliate fee %">
-              <input className="input" type="number" min={0} max={100} step="0.01" value={form.affiliateFeePercent}
+            <Field label="Affiliate fee %" hint={isAffiliateCoupon ? undefined : "Not applicable to general coupons."}>
+              <input className="input" type="number" min={0} max={100} step="0.01" disabled={!isAffiliateCoupon} value={isAffiliateCoupon ? form.affiliateFeePercent : ""}
                 onChange={(e) => setForm({ ...form, affiliateFeePercent: e.target.value })} />
             </Field>
-            <Field label="Affiliate email">
-              <input className="input" type="email" value={form.affiliateEmail}
+            <Field label="Affiliate email" hint={isAffiliateCoupon ? undefined : "Not applicable to general coupons."}>
+              <input className="input" type="email" disabled={!isAffiliateCoupon} value={isAffiliateCoupon ? form.affiliateEmail : ""}
                 onChange={(e) => setForm({ ...form, affiliateEmail: e.target.value })} />
             </Field>
             <Field label="Expires at" hint="Leave blank for no expiry.">
               <input className="input" type="datetime-local" value={form.expiresAt}
                 onChange={(e) => setForm({ ...form, expiresAt: e.target.value })} />
             </Field>
-            <Field label="Max redemptions" hint="Leave blank for unlimited.">
+            <Field label="Max redemptions" hint="Total limit across all customers. Leave blank for unlimited.">
               <input className="input" type="number" min={1} step={1} value={form.maxRedemptions}
                 onChange={(e) => setForm({ ...form, maxRedemptions: e.target.value })} />
             </Field>
@@ -465,8 +748,59 @@ export default function CouponsPage() {
                 <option value="false">Inactive</option>
               </select>
             </Field>
+
+            {!isAffiliateCoupon && (
+              <>
+                <div className="sm:col-span-2">
+                  <span className="mb-1.5 block text-xs font-semibold text-slate-300">Checkout availability</span>
+                  <label className="flex min-h-[36px] cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5">
+                    <input
+                      type="checkbox"
+                      checked={form.localEnabled === "true"}
+                      onChange={(e) => setForm({ ...form, localEnabled: e.target.checked ? "true" : "false" })}
+                    />
+                    <span>Enable for Local (PayMongo) checkout</span>
+                  </label>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <span className="mb-1.5 block text-xs font-semibold text-slate-300">GHL locations</span>
+                  <label className="flex min-h-[36px] cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5">
+                    <input
+                      type="checkbox"
+                      checked={form.ghlAllLocations === "true"}
+                      onChange={(e) => setForm({ ...form, ghlAllLocations: e.target.checked ? "true" : "false" })}
+                    />
+                    <span>All locations</span>
+                  </label>
+                  {form.ghlAllLocations !== "true" && (
+                    <fieldset className="mt-1.5 max-h-40 overflow-y-auto rounded-lg border border-white/10 bg-[#0c162ce6] p-2.5">
+                      <legend className="sr-only">Select GHL locations for this coupon</legend>
+                      {loadingGhlLocations && <div className="p-2 text-xs text-slate-400">Loading locations…</div>}
+                      {!loadingGhlLocations && ghlLocations.length === 0 && (
+                        <div className="p-2 text-xs text-slate-400">No GHL locations found.</div>
+                      )}
+                      {ghlLocations.map((loc) => (
+                        <label key={loc.locationId} className="flex min-h-[36px] cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5">
+                          <input
+                            type="checkbox"
+                            checked={form.ghlLocationIds.includes(loc.locationId)}
+                            onChange={() => toggleGhlLocation(loc.locationId)}
+                          />
+                          <span>{loc.name}</span>
+                        </label>
+                      ))}
+                    </fieldset>
+                  )}
+                </div>
+              </>
+            )}
+
             <div className="sm:col-span-2">
-              <Field label="Notes">
+              <Field
+                label="Notes"
+                hint="Each customer can use this code once. Recurring products: discount applies to the first payment only."
+              >
                 <input className="input" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
               </Field>
             </div>
@@ -589,13 +923,16 @@ export default function CouponsPage() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
+              <label className="sr-only" htmlFor="ghl-coupon-search">Search GHL coupons</label>
               <input
+                id="ghl-coupon-search"
                 className="input w-52"
                 placeholder="Search GHL coupons…"
                 value={ghlSearch}
                 onChange={(e) => setGhlSearch(e.target.value)}
               />
-              <select className="input w-36" value={ghlStatusFilter} onChange={(e) => setGhlStatusFilter(e.target.value)}>
+              <label className="sr-only" htmlFor="ghl-coupon-status-filter">Filter GHL coupons by status</label>
+              <select id="ghl-coupon-status-filter" className="input w-36" value={ghlStatusFilter} onChange={(e) => setGhlStatusFilter(e.target.value)}>
                 <option value="">All statuses</option>
                 <option value="scheduled">Scheduled</option>
                 <option value="active">Active</option>
@@ -604,22 +941,19 @@ export default function CouponsPage() {
               <button onClick={handleLoadGhlCoupons} disabled={loadingGhlCoupons} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold disabled:opacity-60">
                 {loadingGhlCoupons ? "Loading…" : "Fetch GHL"}
               </button>
-              <button onClick={handleSyncGhlCoupons} disabled={syncingGhlCoupons} className="rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm font-extrabold text-slate-950 disabled:opacity-60">
-                {syncingGhlCoupons ? "Syncing…" : "Sync Local to GHL"}
+              <button onClick={handleDryRunSync} disabled={dryRunningSync} className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-sm font-bold text-cyan-100 disabled:opacity-60">
+                {dryRunningSync ? "Checking…" : "Preview Sync to GHL"}
               </button>
+              {ghlSyncPlan && (ghlSyncPlan.summary.wouldCreate ?? 0) + (ghlSyncPlan.summary.wouldUpdate ?? 0) > 0 && (
+                <button onClick={handleConfirmSync} disabled={syncingGhlCoupons} className="rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm font-extrabold text-slate-950 disabled:opacity-60">
+                  {syncingGhlCoupons ? "Syncing…" : "Confirm & Apply"}
+                </button>
+              )}
             </div>
           </div>
 
-          {ghlSyncSummary && (
-            <div className="m-3.5 grid gap-2 rounded-xl border border-blue-300/20 bg-blue-300/10 p-3 text-xs text-blue-100 sm:grid-cols-6">
-              <Metric label="Locations" value={ghlSyncSummary.locations} />
-              <Metric label="Local" value={ghlSyncSummary.localCoupons} />
-              <Metric label="Active" value={ghlSyncSummary.activeCoupons} />
-              <Metric label="Created" value={ghlSyncSummary.created} />
-              <Metric label="Existing" value={ghlSyncSummary.skippedExisting} />
-              <Metric label="Errors" value={ghlSyncSummary.errors} />
-            </div>
-          )}
+          {ghlSyncPlan && renderSyncPlan(ghlSyncPlan, "Planned changes (dry run - nothing written yet)")}
+          {ghlSyncResult && renderSyncPlan(ghlSyncResult, "Sync applied")}
 
           {ghlErrors.length > 0 && (
             <div className="m-3.5 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-xs text-amber-100">

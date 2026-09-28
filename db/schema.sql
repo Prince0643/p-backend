@@ -32,6 +32,24 @@ CREATE TABLE IF NOT EXISTS coupons (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Two coupon types: 'affiliate' (each affiliate's personal code, created at registration,
+-- carries the affiliate fee, no total usage limit) and 'general' (admin-managed promo
+-- codes, no affiliate/fee, optionally capped by max_redemptions). Backward-compatible
+-- migration for databases created before this distinction existed.
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'general';
+ALTER TABLE coupons DROP CONSTRAINT IF EXISTS coupons_type_check;
+ALTER TABLE coupons ADD CONSTRAINT coupons_type_check CHECK (type IN ('affiliate', 'general'));
+-- Which GHL locations a GENERAL coupon should sync to. NULL = all configured locations.
+-- Not used for affiliate coupons (those always sync to every configured location).
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS ghl_location_ids TEXT[];
+-- Whether this coupon can be applied on Local (PayMongo) checkout. Coupons imported from
+-- GHL default to false (they were never meant for the Local funnel).
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS local_enabled BOOLEAN NOT NULL DEFAULT true;
+-- Optional bookkeeping for coupons imported from GHL: original GHL product/price/variant
+-- restrictions, per-location GHL coupon ids, etc. Not used by application logic.
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS ghl_coupon_meta JSONB;
+CREATE INDEX IF NOT EXISTS idx_coupons_type ON coupons(type);
+
 -- Junction table: which products a coupon is eligible for. No rows = eligible for all products.
 CREATE TABLE IF NOT EXISTS coupon_products (
     coupon_code             TEXT NOT NULL REFERENCES coupons(code) ON DELETE CASCADE,
@@ -99,6 +117,13 @@ CREATE TABLE IF NOT EXISTS affiliates (
 ALTER TABLE affiliates ADD COLUMN IF NOT EXISTS password_hash TEXT;
 CREATE INDEX IF NOT EXISTS idx_affiliates_coupon_code ON affiliates(coupon_code);
 
+-- Idempotent backfill (must run after the affiliates table exists): safe to run on every
+-- migrate since it only ever promotes a coupon to 'affiliate' (never demotes), so
+-- re-running never undoes an admin's own 'general' classification of an unrelated coupon.
+UPDATE coupons SET type = 'affiliate'
+WHERE type <> 'affiliate'
+  AND (affiliate_email IS NOT NULL OR code IN (SELECT coupon_code FROM affiliates WHERE coupon_code IS NOT NULL));
+
 -- Admin accounts for the console login. The env-configured ADMIN_API_KEY/API_KEY
 -- (see middleware/auth.js) keeps working as a permanent master/bootstrap credential
 -- on top of whatever admin accounts exist here. Any logged-in admin can create
@@ -164,6 +189,12 @@ CREATE TABLE IF NOT EXISTS campaigns (
 );
 CREATE INDEX IF NOT EXISTS idx_campaigns_coupon_code ON campaigns(coupon_code);
 
+-- One campaign now applies to ALL affiliates (each gets a personal ref link automatically)
+-- instead of being tied to a single coupon, so coupon_code is no longer required for new
+-- campaigns. Column kept (nullable) for legacy campaigns/reporting; app code no longer
+-- reads or writes it for new campaigns.
+ALTER TABLE campaigns ALTER COLUMN coupon_code DROP NOT NULL;
+
 -- Attributes a redemption to the campaign link that drove it (checkout auto-attribution).
 -- Must come after the campaigns table is created (coupon_redemptions is created earlier in this file).
 ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL;
@@ -212,3 +243,7 @@ ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS ghl_product_ids TEXT[];
 ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS affiliate_paid_at TIMESTAMPTZ;
 ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
 ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT false;
+
+-- Speeds up the per-customer-once affiliate/general coupon lookups in
+-- couponStore.beginCouponReservation (matched by normalized/lowercased email).
+CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_email_lower ON coupon_redemptions (lower(email));

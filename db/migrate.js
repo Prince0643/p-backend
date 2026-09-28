@@ -1,6 +1,8 @@
 // db/migrate.js
 // Applies db/schema.sql (idempotent) then imports any existing data/*.json content
-// into Postgres (idempotent - ON CONFLICT DO NOTHING, safe to re-run).
+// into Postgres, but ONLY into a table that is completely empty (fresh install) - same
+// rule seedCampaignSites already followed. This makes every import safe to re-run
+// without ever overwriting admin edits or resurrecting deleted rows.
 // Usage: node db/migrate.js
 const fs = require('fs');
 const path = require('path');
@@ -15,6 +17,11 @@ function readJsonSafe(filePath, fallback) {
     }
 }
 
+async function isTableEmpty(client, table) {
+    const { rows } = await client.query(`SELECT 1 FROM ${table} LIMIT 1`);
+    return rows.length === 0;
+}
+
 async function applySchema(client) {
     const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
     await client.query(schema);
@@ -22,25 +29,18 @@ async function applySchema(client) {
 }
 
 async function importProducts(client) {
+    if (!(await isTableEmpty(client, 'products'))) {
+        console.log('Products: skipped (table not empty)');
+        return;
+    }
+
     const data = readJsonSafe(path.join(__dirname, '..', 'data', 'products.json'), { products: [] });
     let count = 0;
     for (const p of data.products || []) {
         await client.query(
             `INSERT INTO products (id, name, amount_php, currency, billing_type, billing_interval, default_payment_method, default_source, default_tax_rate, display_suffix, success_url, cancel_url)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-             ON CONFLICT (id) DO UPDATE SET
-                name = EXCLUDED.name,
-                amount_php = EXCLUDED.amount_php,
-                currency = EXCLUDED.currency,
-                billing_type = EXCLUDED.billing_type,
-                billing_interval = EXCLUDED.billing_interval,
-                default_payment_method = EXCLUDED.default_payment_method,
-                default_source = EXCLUDED.default_source,
-                default_tax_rate = EXCLUDED.default_tax_rate,
-                display_suffix = EXCLUDED.display_suffix,
-                success_url = EXCLUDED.success_url,
-                cancel_url = EXCLUDED.cancel_url,
-                updated_at = now()`,
+             ON CONFLICT (id) DO NOTHING`,
             [
                 p.id, p.name, p.amountPhp, p.currency || 'PHP',
                 p.billing?.type || 'one_time', p.billing?.interval || null,
@@ -55,16 +55,24 @@ async function importProducts(client) {
 }
 
 async function importCoupons(client) {
+    if (!(await isTableEmpty(client, 'coupons'))) {
+        console.log('Coupons: skipped (table not empty)');
+        return;
+    }
+
     const data = readJsonSafe(path.join(__dirname, '..', 'data', 'coupons.json'), { coupons: [] });
     let count = 0;
     for (const c of data.coupons || []) {
         await client.query(
-            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, type, ghl_location_ids, local_enabled)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
              ON CONFLICT (code) DO NOTHING`,
             [
                 c.code, c.discountPercent, c.affiliateFeePercent || 0, c.affiliateEmail || null,
-                c.active !== false, c.expiresAt || null, c.maxRedemptions || null, c.notes || null
+                c.active !== false, c.expiresAt || null, c.maxRedemptions || null, c.notes || null,
+                c.type === 'affiliate' || c.affiliateEmail ? 'affiliate' : 'general',
+                Array.isArray(c.ghlLocationIds) ? c.ghlLocationIds : null,
+                c.localEnabled !== false
             ]
         );
         for (const productId of c.productIds || []) {
@@ -79,6 +87,11 @@ async function importCoupons(client) {
 }
 
 async function importCouponRedemptions(client) {
+    if (!(await isTableEmpty(client, 'coupon_redemptions'))) {
+        console.log('Coupon redemptions: skipped (table not empty)');
+        return;
+    }
+
     const data = readJsonSafe(path.join(__dirname, '..', 'data', 'coupon_redemptions.json'), { redemptions: [] });
     let count = 0;
     for (const r of data.redemptions || []) {
@@ -98,6 +111,11 @@ async function importCouponRedemptions(client) {
 }
 
 async function importAffiliates(client) {
+    if (!(await isTableEmpty(client, 'affiliates'))) {
+        console.log('Affiliates: skipped (table not empty)');
+        return;
+    }
+
     const data = readJsonSafe(path.join(__dirname, '..', 'data', 'affiliates.json'), { affiliates: [] });
     let count = 0;
     for (const a of data.affiliates || []) {
@@ -118,6 +136,11 @@ async function importAffiliates(client) {
 }
 
 async function importDigitalSolutions(client) {
+    if (!(await isTableEmpty(client, 'digital_solutions_transactions'))) {
+        console.log('Digital solutions transactions: skipped (table not empty)');
+        return;
+    }
+
     const data = readJsonSafe(path.join(__dirname, '..', 'data', 'digital_solutions.json'), { transactions: [] });
     let count = 0;
     for (const t of data.transactions || []) {
@@ -139,6 +162,11 @@ async function importDigitalSolutions(client) {
 }
 
 async function importGhlInvoiceSchedules(client) {
+    if (!(await isTableEmpty(client, 'ghl_invoice_schedules'))) {
+        console.log('GHL invoice schedules: skipped (table not empty)');
+        return;
+    }
+
     const data = readJsonSafe(path.join(__dirname, '..', 'data', 'ghl_invoice_schedules.json'), { schedules: {} });
     let count = 0;
     for (const [key, scheduleId] of Object.entries(data.schedules || {})) {
@@ -162,9 +190,8 @@ async function importGhlInvoiceSchedules(client) {
  * 'local' for everything else (our PayMongo checkout funnels).
  */
 async function seedCampaignSites(client) {
-    const { rows: existing } = await client.query('SELECT 1 FROM campaign_sites LIMIT 1');
-    if (existing.length > 0) {
-        console.log('Campaign sites already seeded, skipping.');
+    if (!(await isTableEmpty(client, 'campaign_sites'))) {
+        console.log('Campaign sites: skipped (table not empty)');
         return;
     }
 
@@ -224,4 +251,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { seedCampaignSites, main };
+module.exports = { seedCampaignSites, isTableEmpty, main };

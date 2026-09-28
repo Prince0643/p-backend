@@ -84,7 +84,7 @@ test('returns an empty summary with an error when the Global location is not con
 
 test('imports a paid order with a matching affiliate coupon, USD currency and correct fee formula', async () => {
     const email = `ghl.affiliate.${Date.now()}@example.com`;
-    const code = await createTestCoupon({ discountPercent: 0.15, affiliateFeePercent: 0.10, affiliateEmail: email });
+    const code = await createTestCoupon({ type: 'affiliate', discountPercent: 0.15, affiliateFeePercent: 0.10, affiliateEmail: email });
     const order = baseOrder({ couponCode: code, amount: 85 });
 
     mockOrdersApi({
@@ -120,7 +120,7 @@ test('imports a paid order with a matching affiliate coupon, USD currency and co
 });
 
 test('skips invoice-sourced orders (would double-count PayMongo mirror invoices)', async () => {
-    const code = await createTestCoupon({ affiliateEmail: 'someone@example.com' });
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: 'someone@example.com' });
     const order = baseOrder({ couponCode: code, sourceType: 'invoice' });
     mockOrdersApi({ orders: [order] });
 
@@ -143,7 +143,7 @@ test('skips orders with an unknown coupon code', async () => {
 });
 
 test('skips orders whose coupon has no linked affiliate', async () => {
-    const code = await createTestCoupon({ affiliateEmail: null });
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: null });
     const order = baseOrder({ couponCode: code });
     mockOrdersApi({ orders: [order] });
 
@@ -157,7 +157,7 @@ test('skips orders whose coupon has no linked affiliate', async () => {
 });
 
 test('skips test/non-live orders', async () => {
-    const code = await createTestCoupon({ affiliateEmail: 'someone2@example.com' });
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: 'someone2@example.com' });
     const order = baseOrder({ couponCode: code, liveMode: false });
     mockOrdersApi({ orders: [order] });
 
@@ -172,7 +172,7 @@ test('skips test/non-live orders', async () => {
 
 test('attributes to a campaign only when exactly one active GLOBAL campaign matches the order product', async () => {
     const email = `ghl.campaign.${Date.now()}@example.com`;
-    const code = await createTestCoupon({ affiliateEmail: email, affiliateFeePercent: 0.10 });
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: email, affiliateFeePercent: 0.10 });
     const site = await createTestCampaignSite({ channel: 'global', products: [{ kind: 'ghl', ref: 'prod_match', name: 'Matched Product' }] });
 
     let campaignId;
@@ -203,7 +203,7 @@ test('attributes to a campaign only when exactly one active GLOBAL campaign matc
 
 test('leaves campaign_id null when the order product matches zero or multiple active campaigns', async () => {
     const email = `ghl.ambiguous.${Date.now()}@example.com`;
-    const code = await createTestCoupon({ affiliateEmail: email });
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: email });
     const site = await createTestCampaignSite({ channel: 'global', products: [{ kind: 'ghl', ref: 'prod_ambiguous', name: 'Ambiguous Product' }] });
 
     let campaignIdA, campaignIdB;
@@ -236,7 +236,7 @@ test('leaves campaign_id null when the order product matches zero or multiple ac
 
 test('imports a recent order even when it is listed after an old (out-of-cutoff) order (sort-order independence)', async () => {
     const email = `ghl.sortorder.${Date.now()}@example.com`;
-    const code = await createTestCoupon({ affiliateEmail: email, affiliateFeePercent: 0.10 });
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: email, affiliateFeePercent: 0.10 });
 
     const oldOrder = baseOrder({
         couponCode: code,
@@ -271,7 +271,7 @@ test('imports a recent order even when it is listed after an old (out-of-cutoff)
 
 test('refund before affiliate payout releases the redemption', async () => {
     const email = `ghl.refund.before.${Date.now()}@example.com`;
-    const code = await createTestCoupon({ affiliateEmail: email, affiliateFeePercent: 0.10 });
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: email, affiliateFeePercent: 0.10 });
     const order = baseOrder({ couponCode: code });
     mockOrdersApi({
         orders: [order],
@@ -297,7 +297,7 @@ test('refund before affiliate payout releases the redemption', async () => {
 
 test('refund after affiliate payout flags for review instead of clawing back', async () => {
     const email = `ghl.refund.after.${Date.now()}@example.com`;
-    const code = await createTestCoupon({ affiliateEmail: email, affiliateFeePercent: 0.10 });
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: email, affiliateFeePercent: 0.10 });
     const order = baseOrder({ couponCode: code });
     mockOrdersApi({
         orders: [order],

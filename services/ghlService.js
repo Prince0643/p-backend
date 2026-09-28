@@ -182,6 +182,19 @@ class GhlService {
     }
 
     createClient({ privateKey, locationId, version = '2021-07-28' }) {
+        // Safety net: this builds a real axios client that talks to the live GHL API.
+        // Tests must always mock `ghlService.createClient` (or the higher-level method
+        // that calls it) rather than let this real implementation run - see
+        // tests/ghlCoupons.test.js, tests/ghlOrderImport.test.js, tests/campaignSites.test.js.
+        // If a test path reaches here it means a mock is missing and a real request is
+        // about to be sent, which has previously created junk coupons in production GHL.
+        if (process.env.NODE_ENV === 'test') {
+            throw new Error(
+                'ghlService.createClient() was called for real during NODE_ENV=test - mock ' +
+                'ghlService.createClient (or the calling method) instead of letting this reach ' +
+                'the live GHL API.'
+            );
+        }
         return axios.create({
             baseURL: this.baseURL,
             timeout: 15000,

@@ -214,8 +214,12 @@ class GhlService {
             name: coupon.name || '',
             status: coupon.status || '',
             discountType: coupon.discountType || coupon.type || '',
-            discountValue: coupon.discountValue ?? coupon.value ?? null,
-            usageLimit: coupon.usageLimit ?? coupon.maxRedemptions ?? null,
+            discountValue: (coupon.discountValue ?? coupon.value) != null
+                ? Number(coupon.discountValue ?? coupon.value)
+                : null,
+            usageLimit: (coupon.usageLimit ?? coupon.maxRedemptions) != null
+                ? Number(coupon.usageLimit ?? coupon.maxRedemptions)
+                : null,
             redemptionCount: coupon.redemptionCount ?? coupon.usageCount ?? coupon.usedCount ?? null,
             startDate: coupon.startDate || coupon.startsAt || null,
             endDate: coupon.endDate || coupon.expiresAt || null,
@@ -388,16 +392,25 @@ class GhlService {
      */
     couponNeedsUpdate(existingGhlCoupon, coupon) {
         const expectedDiscountValue = Number((Number(coupon.discountPercent || 0) * 100).toFixed(4));
-        const expectedUsageLimit = coupon.maxRedemptions || null;
-        const existingUsageLimit = existingGhlCoupon.usageLimit || null;
+        const expectedUsageLimit = coupon.maxRedemptions ? Number(coupon.maxRedemptions) : null;
+        const existingUsageLimit = existingGhlCoupon.usageLimit != null ? Number(existingGhlCoupon.usageLimit) : null;
         const expectedEndDate = coupon.expiresAt ? new Date(coupon.expiresAt).toISOString() : null;
         const existingEndDate = existingGhlCoupon.endDate ? new Date(existingGhlCoupon.endDate).toISOString() : null;
+
+        // The live GHL API returns these as numbers (1/0) as often as booleans, so
+        // compare truthiness rather than strict equality. GHL defaults
+        // applyToFuturePayments to TRUE when the field is omitted entirely, so
+        // undefined/null must be treated as "true" (i.e. needs update), not as falsy.
+        const applyToFuturePayments = existingGhlCoupon.applyToFuturePayments == null
+            ? true
+            : Boolean(existingGhlCoupon.applyToFuturePayments);
+        const limitPerCustomer = Boolean(existingGhlCoupon.limitPerCustomer);
 
         if (Number(existingGhlCoupon.discountValue) !== expectedDiscountValue) return true;
         if (existingUsageLimit !== expectedUsageLimit) return true;
         if (existingEndDate !== expectedEndDate) return true;
-        if (existingGhlCoupon.applyToFuturePayments !== false) return true;
-        if (existingGhlCoupon.limitPerCustomer !== true) return true;
+        if (applyToFuturePayments) return true;
+        if (!limitPerCustomer) return true;
         return false;
     }
 

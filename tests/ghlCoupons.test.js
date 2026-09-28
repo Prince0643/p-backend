@@ -234,3 +234,89 @@ test('buildCouponUpdatePayload carries over existing productIds/startDate and us
     assert.equal(payload.limitPerCustomer, true);
     assert.equal(payload.usageLimit, 100);
 });
+
+test('couponNeedsUpdate reports no drift when GHL returns limitPerCustomer/applyToFuturePayments as numbers (live API shape)', () => {
+    // Real-world example: OCTFEST15 came back as
+    // { applyToFuturePayments: false, limitPerCustomer: 1 } and was incorrectly
+    // flagged as needing an update by strict `!== true` / `!== false` checks.
+    const existing = {
+        discountValue: 15,
+        usageLimit: 100,
+        endDate: null,
+        applyToFuturePayments: false,
+        limitPerCustomer: 1
+    };
+    const coupon = { discountPercent: 0.15, maxRedemptions: 100, expiresAt: null };
+    assert.equal(ghlService.couponNeedsUpdate(existing, coupon), false);
+});
+
+test('couponNeedsUpdate reports no drift for the boolean-shaped equivalent (true/false)', () => {
+    const existing = {
+        discountValue: 15,
+        usageLimit: 100,
+        endDate: null,
+        applyToFuturePayments: false,
+        limitPerCustomer: true
+    };
+    const coupon = { discountPercent: 0.15, maxRedemptions: 100, expiresAt: null };
+    assert.equal(ghlService.couponNeedsUpdate(existing, coupon), false);
+});
+
+test('couponNeedsUpdate flags drift when limitPerCustomer is falsy (0 or false)', () => {
+    const coupon = { discountPercent: 0.15, maxRedemptions: 100, expiresAt: null };
+    const withZero = { discountValue: 15, usageLimit: 100, endDate: null, applyToFuturePayments: false, limitPerCustomer: 0 };
+    const withFalse = { discountValue: 15, usageLimit: 100, endDate: null, applyToFuturePayments: false, limitPerCustomer: false };
+    assert.equal(ghlService.couponNeedsUpdate(withZero, coupon), true);
+    assert.equal(ghlService.couponNeedsUpdate(withFalse, coupon), true);
+});
+
+test('couponNeedsUpdate flags drift when applyToFuturePayments is truthy (1 or true)', () => {
+    const coupon = { discountPercent: 0.15, maxRedemptions: 100, expiresAt: null };
+    const withOne = { discountValue: 15, usageLimit: 100, endDate: null, applyToFuturePayments: 1, limitPerCustomer: 1 };
+    const withTrue = { discountValue: 15, usageLimit: 100, endDate: null, applyToFuturePayments: true, limitPerCustomer: true };
+    assert.equal(ghlService.couponNeedsUpdate(withOne, coupon), true);
+    assert.equal(ghlService.couponNeedsUpdate(withTrue, coupon), true);
+});
+
+test('couponNeedsUpdate treats a missing/undefined applyToFuturePayments as drift (GHL defaults it to true when omitted)', () => {
+    const coupon = { discountPercent: 0.15, maxRedemptions: 100, expiresAt: null };
+    const missing = { discountValue: 15, usageLimit: 100, endDate: null, limitPerCustomer: true };
+    const nullValue = { discountValue: 15, usageLimit: 100, endDate: null, applyToFuturePayments: null, limitPerCustomer: true };
+    assert.equal(ghlService.couponNeedsUpdate(missing, coupon), true);
+    assert.equal(ghlService.couponNeedsUpdate(nullValue, coupon), true);
+});
+
+test('couponNeedsUpdate coerces usageLimit for comparison even when it comes back as a numeric string', () => {
+    const existing = {
+        discountValue: 15,
+        usageLimit: '100',
+        endDate: null,
+        applyToFuturePayments: false,
+        limitPerCustomer: true
+    };
+    const coupon = { discountPercent: 0.15, maxRedemptions: 100, expiresAt: null };
+    assert.equal(ghlService.couponNeedsUpdate(existing, coupon), false);
+});
+
+test('normalizeCoupon coerces discountValue and usageLimit to numbers when GHL returns them as strings', () => {
+    const location = { name: 'Alpha Location', locationId: 'loc_alpha' };
+    const normalized = ghlService.normalizeCoupon({
+        _id: 'ghl_1',
+        code: 'STRCOERCE',
+        discountValue: '15',
+        usageLimit: '100',
+        applyToFuturePayments: false,
+        limitPerCustomer: 1
+    }, location);
+    assert.equal(normalized.discountValue, 15);
+    assert.strictEqual(typeof normalized.discountValue, 'number');
+    assert.equal(normalized.usageLimit, 100);
+    assert.strictEqual(typeof normalized.usageLimit, 'number');
+});
+
+test('normalizeCoupon leaves discountValue/usageLimit as null when GHL omits them', () => {
+    const location = { name: 'Alpha Location', locationId: 'loc_alpha' };
+    const normalized = ghlService.normalizeCoupon({ _id: 'ghl_2', code: 'NOLIMIT' }, location);
+    assert.equal(normalized.discountValue, null);
+    assert.equal(normalized.usageLimit, null);
+});

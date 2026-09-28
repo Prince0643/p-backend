@@ -28,11 +28,35 @@ exports.me = async (req, res) => {
         const paidRedemptions = redemptions.filter((r) => r.status === 'paid');
         const totalEarnings = paidRedemptions.reduce((sum, r) => sum + r.affiliateFeeAmount, 0);
 
+        // Per-currency breakdown: LOCAL (PayMongo, PHP) and GLOBAL (GHL, USD) sales are
+        // both credited to the same affiliate now, so a single-currency total would mix
+        // currencies. earned/paidOut/unpaid are all derived from status='paid' rows only
+        // (a customer payment that never completed never counts).
+        const totalsByCurrency = {};
+        for (const r of paidRedemptions) {
+            const currency = r.currency || 'PHP';
+            if (!totalsByCurrency[currency]) {
+                totalsByCurrency[currency] = { sales: 0, earned: 0, paidOut: 0, unpaid: 0 };
+            }
+            const bucket = totalsByCurrency[currency];
+            bucket.sales += r.baseAmount;
+            bucket.earned += r.affiliateFeeAmount;
+            if (r.affiliatePaidAt) bucket.paidOut += r.affiliateFeeAmount;
+        }
+        for (const currency of Object.keys(totalsByCurrency)) {
+            const bucket = totalsByCurrency[currency];
+            bucket.sales = Number(bucket.sales.toFixed(2));
+            bucket.earned = Number(bucket.earned.toFixed(2));
+            bucket.paidOut = Number(bucket.paidOut.toFixed(2));
+            bucket.unpaid = Number((bucket.earned - bucket.paidOut).toFixed(2));
+        }
+
         res.json({
             success: true,
             affiliate,
             coupon,
             redemptions,
+            totalsByCurrency,
             stats: {
                 totalRedemptions: redemptions.length,
                 paidRedemptions: paidRedemptions.length,

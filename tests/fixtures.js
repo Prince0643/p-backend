@@ -2,6 +2,7 @@
 const crypto = require('crypto');
 const pool = require('../db/pool');
 const couponStore = require('../utils/couponStore');
+const campaignSiteStore = require('../utils/campaignSiteStore');
 
 const COUPON_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
@@ -34,6 +35,25 @@ async function cleanupCoupon(code) {
     await pool.query('DELETE FROM digital_solutions_transactions WHERE promo_code = $1', [code]);
     await pool.query('DELETE FROM coupon_redemptions WHERE code = $1', [code]);
     await pool.query('DELETE FROM coupons WHERE code = $1', [code]);
+}
+
+/** Creates a test campaign site (defaults: local channel, unique https url). Returns the site. */
+async function createTestCampaignSite(overrides = {}) {
+    const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const site = await campaignSiteStore.createSite({
+        name: `Test Site ${suffix}`,
+        url: `https://test-site-${suffix}.example.com`,
+        channel: 'local',
+        active: true,
+        products: [],
+        ...overrides
+    });
+    return site;
+}
+
+async function cleanupCampaignSite(id) {
+    if (!id) return;
+    await pool.query('DELETE FROM campaign_sites WHERE id = $1', [id]);
 }
 
 async function cleanupAffiliate(email) {
@@ -74,6 +94,8 @@ module.exports = {
     testCouponCode,
     createTestCoupon,
     cleanupCoupon,
+    createTestCampaignSite,
+    cleanupCampaignSite,
     cleanupAffiliate,
     signWebhookBody,
     paymentEventPayload

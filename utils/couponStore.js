@@ -305,7 +305,14 @@ function rowToRedemption(row) {
         createdAt: new Date(row.created_at).toISOString(),
         paidAt: row.paid_at ? new Date(row.paid_at).toISOString() : null,
         releasedAt: row.released_at ? new Date(row.released_at).toISOString() : null,
-        campaignId: row.campaign_id || null
+        campaignId: row.campaign_id || null,
+        source: row.source || 'paymongo',
+        channel: row.source === 'ghl' ? 'global' : 'local',
+        ghlLocationId: row.ghl_location_id || null,
+        ghlProductIds: row.ghl_product_ids || [],
+        affiliatePaidAt: row.affiliate_paid_at ? new Date(row.affiliate_paid_at).toISOString() : null,
+        refundedAt: row.refunded_at ? new Date(row.refunded_at).toISOString() : null,
+        needsReview: Boolean(row.needs_review)
     };
 }
 
@@ -351,7 +358,7 @@ async function recordRedemption(entry) {
     }
 }
 
-async function listRedemptions({ code, status } = {}) {
+async function listRedemptions({ code, status, payout } = {}) {
     const conditions = [];
     const params = [];
     if (code) {
@@ -362,18 +369,102 @@ async function listRedemptions({ code, status } = {}) {
         params.push(status);
         conditions.push(`status = $${params.length}`);
     }
+    if (payout === 'unpaid') {
+        conditions.push(`affiliate_paid_at IS NULL`);
+    } else if (payout === 'paid') {
+        conditions.push(`affiliate_paid_at IS NOT NULL`);
+    }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const { rows } = await pool.query(`SELECT * FROM coupon_redemptions ${where} ORDER BY created_at DESC`, params);
     return rows.map(rowToRedemption);
 }
 
+/**
+ * Confirms affiliate payout for the given redemption ids. This is distinct from
+ * `status` (which tracks the CUSTOMER's payment state - pending/paid/released) - a
+ * redemption can be status='paid' (customer paid) for a long time before the affiliate
+ * is actually paid out. Only rows that are status='paid' and not already paid out are
+ * touched, so re-running with a stale id list is a no-op for those ids.
+ * Returns { updated: string[], skipped: string[] } so the caller can tell which ids
+ * were actually paid out vs. ignored (already paid out, or not a paid redemption yet).
+ */
 async function markRedemptionsPaid(ids) {
-    const idList = Array.isArray(ids) ? ids : [ids];
-    const { rowCount } = await pool.query(
-        `UPDATE coupon_redemptions SET status = 'paid', paid_at = now() WHERE id = ANY($1::text[]) AND status != 'paid'`,
-        [idList.map(String)]
+    const idList = (Array.isArray(ids) ? ids : [ids]).map(String);
+    const { rows } = await pool.query(
+        `UPDATE coupon_redemptions SET affiliate_paid_at = now()
+         WHERE id = ANY($1::text[]) AND status = 'paid' AND affiliate_paid_at IS NULL
+         RETURNING id`,
+        [idList]
     );
-    return rowCount;
+    const updated = rows.map((r) => r.id);
+    const updatedSet = new Set(updated);
+    const skipped = idList.filter((id) => !updatedSet.has(id));
+    return { updated, skipped };
+}
+
+/**
+ * Inserts a GLOBAL (GHL-sourced) redemption directly as 'paid' - the GHL order import
+ * already fetched full order detail before calling this, unlike the PayMongo
+ * reservation flow. Idempotent via ON CONFLICT (payment_reference) DO NOTHING; returns
+ * null (not inserted, already exists) or the inserted row.
+ */
+async function insertGhlRedemption(entry) {
+    const id = `ghl_${entry.orderId}`;
+    const paymentReference = `ghl:${entry.orderId}`;
+    const { rows } = await pool.query(
+        `INSERT INTO coupon_redemptions
+            (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount,
+             affiliate_fee_amount, affiliate_email, currency, status, created_at, paid_at, campaign_id,
+             source, ghl_location_id, ghl_product_ids)
+         VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,'paid',$11,$11,$12,'ghl',$13,$14)
+         ON CONFLICT (payment_reference) DO NOTHING
+         RETURNING *`,
+        [
+            id, toCouponCode(entry.code), paymentReference,
+            entry.email || null, entry.fullName || null,
+            Number(entry.baseAmount) || 0, Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
+            entry.affiliateEmail || null, entry.currency || 'USD', entry.createdAt || new Date().toISOString(),
+            entry.campaignId || null, entry.ghlLocationId || null, entry.ghlProductIds || []
+        ]
+    );
+    return rows[0] ? rowToRedemption(rows[0]) : null;
+}
+
+/**
+ * Applies a GHL order refund to an already-imported redemption. If the affiliate was
+ * never paid out for it, it's simply released like any other unpaid reversal. If the
+ * affiliate was already paid out, we can't silently claw that back - flag it for manual
+ * review instead. Returns { action: 'released' | 'flagged' | 'not_found' }.
+ */
+async function applyGhlRefund(orderId) {
+    const paymentReference = `ghl:${orderId}`;
+    const { rows: existingRows } = await pool.query('SELECT * FROM coupon_redemptions WHERE payment_reference = $1', [paymentReference]);
+    const existing = existingRows[0];
+    if (!existing) return { action: 'not_found' };
+
+    if (!existing.affiliate_paid_at) {
+        await pool.query(
+            `UPDATE coupon_redemptions SET status = 'released', released_at = now(), refunded_at = now() WHERE payment_reference = $1`,
+            [paymentReference]
+        );
+        return { action: 'released' };
+    }
+
+    await pool.query(
+        `UPDATE coupon_redemptions SET needs_review = true, refunded_at = now() WHERE payment_reference = $1`,
+        [paymentReference]
+    );
+    return { action: 'flagged' };
+}
+
+/** A partial refund never changes status (the customer still gets some/most of what they paid for) - always flag for manual review. */
+async function flagPartialRefund(orderId) {
+    const paymentReference = `ghl:${orderId}`;
+    const { rowCount } = await pool.query(
+        `UPDATE coupon_redemptions SET needs_review = true, refunded_at = now() WHERE payment_reference = $1`,
+        [paymentReference]
+    );
+    return { action: rowCount > 0 ? 'flagged' : 'not_found' };
 }
 
 module.exports = {
@@ -390,5 +481,8 @@ module.exports = {
     releaseReservation,
     recordRedemption,
     listRedemptions,
-    markRedemptionsPaid
+    markRedemptionsPaid,
+    insertGhlRedemption,
+    applyGhlRefund,
+    flagPartialRefund
 };

@@ -168,3 +168,47 @@ CREATE INDEX IF NOT EXISTS idx_campaigns_coupon_code ON campaigns(coupon_code);
 -- Must come after the campaigns table is created (coupon_redemptions is created earlier in this file).
 ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_campaign_id ON coupon_redemptions(campaign_id);
+
+-- Campaign sites: the distinct storefronts/funnels campaigns can point traffic at. Each
+-- site is either 'local' (our PayMongo checkout flow) or 'global' (native GHL checkout
+-- in the Nexistry Core Global GHL location). url is a normalized https origin
+-- (scheme+host, no path/trailing slash) used both for CORS allowlisting and for
+-- validating a campaign's destinationUrl host.
+CREATE TABLE IF NOT EXISTS campaign_sites (
+    id                      TEXT PRIMARY KEY,
+    name                    TEXT NOT NULL,
+    url                     TEXT NOT NULL UNIQUE,
+    channel                 TEXT NOT NULL CHECK (channel IN ('local', 'global')),
+    active                  BOOLEAN NOT NULL DEFAULT true,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Which products a site sells. kind 'local' ref = products.id (validated against the
+-- products table in app code, not a DB FK, since the reference is polymorphic by kind).
+-- kind 'ghl' ref = a GHL product _id in the Global location, which we don't mirror locally.
+CREATE TABLE IF NOT EXISTS campaign_site_products (
+    site_id                 TEXT NOT NULL REFERENCES campaign_sites(id) ON DELETE CASCADE,
+    kind                    TEXT NOT NULL CHECK (kind IN ('local', 'ghl')),
+    ref                     TEXT NOT NULL,
+    name                    TEXT,
+    PRIMARY KEY (site_id, kind, ref)
+);
+
+-- Nullable: legacy campaigns created before campaign sites existed have no site. New
+-- campaigns require one (enforced in app code, not a NOT NULL constraint).
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS site_id TEXT REFERENCES campaign_sites(id);
+CREATE INDEX IF NOT EXISTS idx_campaigns_site_id ON campaigns(site_id);
+
+-- Distinguishes a LOCAL (PayMongo) redemption from a GLOBAL (native GHL checkout)
+-- redemption imported by services/ghlOrderImport.js.
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'paymongo';
+ALTER TABLE coupon_redemptions DROP CONSTRAINT IF EXISTS coupon_redemptions_source_check;
+ALTER TABLE coupon_redemptions ADD CONSTRAINT coupon_redemptions_source_check CHECK (source IN ('paymongo', 'ghl'));
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS ghl_location_id TEXT;
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS ghl_product_ids TEXT[];
+-- Affiliate payout confirmation, distinct from `status` (customer payment state). Nullable
+-- until an admin actually pays the affiliate out - see markRedemptionsPaid in couponStore.js.
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS affiliate_paid_at TIMESTAMPTZ;
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT false;

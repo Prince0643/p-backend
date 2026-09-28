@@ -12,6 +12,7 @@ const clockistryRoutes = require('./routes/clockistry');
 const adminProductRoutes = require('./routes/adminProducts');
 const adminCouponRoutes = require('./routes/adminCoupons');
 const adminCampaignRoutes = require('./routes/adminCampaigns');
+const adminCampaignSiteRoutes = require('./routes/adminCampaignSites');
 const affiliateRoutes = require('./routes/affiliates');
 const adminAffiliateRoutes = require('./routes/adminAffiliates');
 const adminSolutionsRoutes = require('./routes/adminSolutions');
@@ -26,15 +27,26 @@ app.use(helmet({
     contentSecurityPolicy: false,
 }));
 
-// CORS configuration
+// CORS configuration - env ALLOWED_ORIGINS (permanent base) union the origins of
+// currently-active campaign_sites (admin-managed storefronts/funnels), cached ~60s in
+// utils/corsOrigins.js. If the DB lookup fails, we fall back to the env list only.
+const { getActiveSiteOrigins } = require('./utils/corsOrigins');
 const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || [];
 app.use(cors({
-    origin: (origin, callback) => {
+    origin: async (origin, callback) => {
         if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
+            return callback(null, true);
         }
+        try {
+            const siteOrigins = await getActiveSiteOrigins();
+            if (siteOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+        } catch {
+            // getActiveSiteOrigins already falls back internally and never throws, but
+            // guard anyway - CORS must never lock everyone out due to a DB hiccup.
+        }
+        callback(new Error('Not allowed by CORS'));
     },
     credentials: true
 }));
@@ -82,6 +94,7 @@ app.use('/api/admin', adminAuthRoutes);
 app.use('/api/admin', adminProductRoutes);
 app.use('/api/admin', adminCouponRoutes);
 app.use('/api/admin', adminCampaignRoutes);
+app.use('/api/admin', adminCampaignSiteRoutes);
 app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/admin', adminAffiliateRoutes);
 app.use('/api/admin', adminSolutionsRoutes);
@@ -187,6 +200,21 @@ if (require.main === module) {
         console.log(`📝 Environment: ${process.env.NODE_ENV}`);
         console.log(`💰 PayMongo integration ready`);
     });
+}
+
+// GLOBAL GHL order import scheduler - only in production, never in tests or a bare
+// `require('./index')` (e.g. the test suite imports `app` directly, which must never
+// have side effects like a recurring timer touching a real/test database on its own).
+if (process.env.NODE_ENV === 'production') {
+    const { importGlobalOrders } = require('./services/ghlOrderImport');
+    const IMPORT_INTERVAL_MS = 10 * 60 * 1000;
+    const runImport = () => {
+        importGlobalOrders({ backfill: false }).catch((err) => {
+            console.error('GHL global order import failed:', err.message);
+        });
+    };
+    setTimeout(runImport, 30 * 1000);
+    setInterval(runImport, IMPORT_INTERVAL_MS);
 }
 
 module.exports = app;

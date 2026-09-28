@@ -8,6 +8,7 @@ const {
 } = require('../utils/couponStore');
 const affiliateStore = require('../utils/affiliateStore');
 const ghlService = require('../services/ghlService');
+const { importGlobalOrders } = require('../services/ghlOrderImport');
 
 exports.list = async (req, res) => {
     try {
@@ -104,8 +105,8 @@ exports.remove = async (req, res) => {
 
 exports.listRedemptions = async (req, res) => {
     try {
-        const { code, status } = req.query;
-        const redemptions = await listRedemptions({ code, status });
+        const { code, status, payout } = req.query;
+        const redemptions = await listRedemptions({ code, status, payout });
         res.json({ success: true, redemptions });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list redemptions' });
@@ -118,9 +119,22 @@ exports.markRedemptionsPaid = async (req, res) => {
         if (!Array.isArray(ids) || ids.length === 0) {
             return res.status(400).json({ error: 'ids (array) is required' });
         }
-        const updated = await markRedemptionsPaid(ids);
-        res.json({ success: true, updated });
+        const result = await markRedemptionsPaid(ids);
+        // `updated` kept as a count for backward compatibility with existing callers;
+        // updatedIds/skippedIds give the detail (skipped = already paid out, or not a
+        // customer-paid redemption yet).
+        res.json({ success: true, updated: result.updated.length, updatedIds: result.updated, skippedIds: result.skipped });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to mark redemptions paid' });
+    }
+};
+
+exports.importGhlOrders = async (req, res) => {
+    try {
+        const backfill = Boolean(req.body?.backfill);
+        const summary = await importGlobalOrders({ backfill });
+        res.json({ success: true, ...summary });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to import GHL orders' });
     }
 };

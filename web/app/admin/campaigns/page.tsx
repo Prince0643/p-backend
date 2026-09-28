@@ -19,6 +19,9 @@ type Campaign = {
   createdAt: string;
   updatedAt: string;
   affiliate: { id: string; firstName: string; lastName: string; email: string } | null;
+  siteId: string | null;
+  siteName: string | null;
+  siteChannel: "local" | "global" | null;
   stats: {
     paidCount: number;
     pendingCount: number;
@@ -26,6 +29,15 @@ type Campaign = {
     discountTotal: number;
     commissionTotal: number;
   };
+  // currency is the single currency involved in this campaign's redemptions, or null
+  // when it spans more than one (e.g. a legacy campaign with both LOCAL/PHP and
+  // GLOBAL/USD sales) - in that case `stats` above is a currency-mixed sum and
+  // statsByCurrency is the source of truth for display.
+  currency: string | null;
+  statsByCurrency: Record<
+    string,
+    { paidCount: number; pendingCount: number; revenue: number; discountTotal: number; commissionTotal: number }
+  >;
 };
 
 const TRACKING_SNIPPET = '<script src="https://api.nexistrydigitalsolutions.com/public/nx-ref.js" async></script>';
@@ -38,12 +50,32 @@ function money(value: number, currency = "PHP") {
   }).format(Number(value) || 0);
 }
 
+/** Renders a per-currency figure: a single formatted amount when the campaign has one
+ * currency, or one line per currency when it's mixed (currency === null). */
+function moneyByCurrency(campaign: Campaign, field: "revenue" | "commissionTotal") {
+  if (campaign.currency) {
+    return money(campaign.stats[field], campaign.currency);
+  }
+  const entries = Object.entries(campaign.statsByCurrency);
+  if (entries.length === 0) return money(0);
+  return (
+    <div className="space-y-0.5">
+      {entries.map(([currency, stats]) => (
+        <div key={currency}>{money(stats[field], currency)}</div>
+      ))}
+    </div>
+  );
+}
+
 type Coupon = { code: string; active: boolean; affiliateEmail: string };
+
+type Site = { id: string; name: string; url: string; channel: "local" | "global"; active: boolean };
 
 const emptyForm = {
   name: "",
   slug: "",
   couponCode: "",
+  siteId: "",
   destinationUrl: "",
   notes: "",
   active: "true",
@@ -55,6 +87,7 @@ export default function CampaignsPage() {
 
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [sites, setSites] = useState<Site[]>([]);
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -73,6 +106,11 @@ export default function CampaignsPage() {
     setCoupons(data.coupons || []);
   }, []);
 
+  const loadSites = useCallback(async (key: string) => {
+    const data = await apiFetch<{ sites: Site[] }>("/api/admin/campaign-sites", key);
+    setSites(data.sites || []);
+  }, []);
+
   useEffect(() => {
     if (!ready) return;
     const key = requireAuth();
@@ -80,6 +118,7 @@ export default function CampaignsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
     loadCampaigns(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
     loadCoupons(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    loadSites(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load fns intentionally not deps to avoid refetch loops
   }, [ready]);
 
@@ -90,6 +129,7 @@ export default function CampaignsPage() {
       name: c?.name || "",
       slug: c?.slug || "",
       couponCode: c?.couponCode || "",
+      siteId: c?.siteId || "",
       destinationUrl: c?.destinationUrl || "",
       notes: c?.notes || "",
       active: c ? String(!!c.active) : "true",
@@ -102,10 +142,24 @@ export default function CampaignsPage() {
     try {
       await loadCampaigns(key);
       await loadCoupons(key);
+      await loadSites(key);
       toast("Refreshed.");
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
     }
+  }
+
+  function handleSiteChange(siteId: string) {
+    const site = sites.find((s) => s.id === siteId);
+    setForm((f) => ({
+      ...f,
+      siteId,
+      // Prefill the destination with the site's own URL only when the admin hasn't
+      // already typed something else for this site, so switching sites doesn't
+      // clobber a manually-entered path.
+      destinationUrl: site && (!f.destinationUrl || sites.some((s) => f.destinationUrl === s.url)) ? site.url : f.destinationUrl,
+    }));
+    setUrlError(null);
   }
 
   function validateUrlClientSide(value: string): string | null {
@@ -124,6 +178,11 @@ export default function CampaignsPage() {
     const key = requireAuth();
     if (!key) return;
 
+    if (!selectedId && !form.siteId) {
+      toast("Select a campaign site.");
+      return;
+    }
+
     const urlProblem = validateUrlClientSide(form.destinationUrl);
     setUrlError(urlProblem);
     if (urlProblem) return;
@@ -135,6 +194,7 @@ export default function CampaignsPage() {
       notes: form.notes,
       active: form.active === "true",
     };
+    if (form.siteId) payload.siteId = form.siteId;
     if (form.slug.trim()) payload.slug = form.slug.trim().toLowerCase();
 
     setSaving(true);
@@ -267,6 +327,7 @@ export default function CampaignsPage() {
                   <th className="p-2.5">Name</th>
                   <th className="p-2.5">Affiliate</th>
                   <th className="p-2.5">Coupon</th>
+                  <th className="p-2.5">Site</th>
                   <th className="p-2.5">Sales</th>
                   <th className="p-2.5">Revenue</th>
                   <th className="p-2.5">Commission</th>
@@ -278,7 +339,7 @@ export default function CampaignsPage() {
               <tbody>
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="p-3 text-slate-400">
+                    <td colSpan={10} className="p-3 text-slate-400">
                       No campaigns yet. Create one to generate a shareable affiliate link.
                     </td>
                   </tr>
@@ -307,13 +368,25 @@ export default function CampaignsPage() {
                     </td>
                     <td className="p-2.5 font-mono">{c.couponCode}</td>
                     <td className="p-2.5">
+                      {c.siteName ? (
+                        <>
+                          {c.siteName}
+                          <span className={`ml-1.5 rounded-full border px-1.5 py-0.5 text-[10px] ${c.siteChannel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
+                            {c.siteChannel === "global" ? "Global" : "Local"}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="p-2.5">
                       {c.stats.paidCount}
                       {c.stats.pendingCount > 0 && (
                         <span className="ml-1 text-[10px] text-slate-400">+{c.stats.pendingCount} pending</span>
                       )}
                     </td>
-                    <td className="p-2.5">{money(c.stats.revenue)}</td>
-                    <td className="p-2.5">{money(c.stats.commissionTotal)}</td>
+                    <td className="p-2.5">{moneyByCurrency(c, "revenue")}</td>
+                    <td className="p-2.5">{moneyByCurrency(c, "commissionTotal")}</td>
                     <td className="max-w-[160px] truncate p-2.5" title={c.destinationUrl}>
                       {c.destinationUrl}
                     </td>
@@ -385,7 +458,23 @@ export default function CampaignsPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Destination URL" hint="Must be on the allowed domain list. ref/campaign params are added automatically.">
+            <Field label="Site" hint="Only active sites are shown. The destination URL below is prefilled from the site's URL.">
+              <select
+                className="input"
+                required={!selectedId}
+                value={form.siteId}
+                onChange={(e) => handleSiteChange(e.target.value)}
+              >
+                <option value="">Select a campaign site…</option>
+                {sites.filter((s) => s.active || s.id === form.siteId).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} · {s.channel === "global" ? "Global" : "Local"}
+                    {!s.active ? " (inactive)" : ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Destination URL" hint="Must be on the selected site's host. ref/campaign params are added automatically.">
               <input
                 className="input"
                 type="url"

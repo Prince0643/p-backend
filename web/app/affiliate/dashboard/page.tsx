@@ -47,9 +47,29 @@ type Redemption = {
   affiliateFeeAmount: number;
   status: string;
   createdAt: string;
+  source: "paymongo" | "ghl";
+  channel: "local" | "global";
+  currency: string;
+  affiliatePaidAt: string | null;
+  needsReview: boolean;
+  refundedAt: string | null;
 };
 
 type Stats = { totalRedemptions: number; paidRedemptions: number; totalEarnings: number };
+
+type CurrencyTotals = { sales: number; earned: number; paidOut: number; unpaid: number };
+
+function money(value: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(currency === "USD" ? "en-US" : "en-PH", {
+      style: "currency",
+      currency: currency || "PHP",
+      maximumFractionDigits: 2,
+    }).format(Number(value) || 0);
+  } catch {
+    return `${currency || ""} ${Number(value) || 0}`.trim();
+  }
+}
 
 type Campaign = {
   id: string;
@@ -59,6 +79,11 @@ type Campaign = {
   link: string;
   notes: string;
   stats?: { paidCount: number; commissionTotal: number };
+  // currency is the single currency involved, or null when the campaign spans more
+  // than one (e.g. legacy campaigns with both LOCAL/PHP and GLOBAL/USD sales) - in
+  // that case statsByCurrency is the source of truth for display.
+  currency?: string | null;
+  statsByCurrency?: Record<string, { paidCount: number; commissionTotal: number }>;
 };
 
 function statusPill(status: string) {
@@ -75,6 +100,7 @@ export default function AffiliateDashboardPage() {
   const [coupon, setCoupon] = useState<Coupon | null>(null);
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [totalsByCurrency, setTotalsByCurrency] = useState<Record<string, CurrencyTotals> | null>(null);
   const [copied, setCopied] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [copiedCampaignId, setCopiedCampaignId] = useState<string | null>(null);
@@ -86,14 +112,18 @@ export default function AffiliateDashboardPage() {
   const [payoutSaving, setPayoutSaving] = useState(false);
 
   const load = useCallback(async (token: string) => {
-    const data = await apiFetch<{ affiliate: Affiliate; coupon: Coupon | null; redemptions: Redemption[]; stats: Stats }>(
-      "/api/affiliates/me",
-      token
-    );
+    const data = await apiFetch<{
+      affiliate: Affiliate;
+      coupon: Coupon | null;
+      redemptions: Redemption[];
+      stats: Stats;
+      totalsByCurrency?: Record<string, CurrencyTotals>;
+    }>("/api/affiliates/me", token);
     setAffiliate(data.affiliate);
     setCoupon(data.coupon);
     setRedemptions(data.redemptions);
     setStats(data.stats);
+    setTotalsByCurrency(data.totalsByCurrency || null);
     setRegion(data.affiliate.paymentRegion);
     setPhMethod(data.affiliate.paymentRegion === "PH" ? data.affiliate.preferredBank : "");
     setGlobalMethod(data.affiliate.paymentRegion === "GLOBAL" ? data.affiliate.preferredBank : "");
@@ -210,11 +240,27 @@ export default function AffiliateDashboardPage() {
         </div>
       )}
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="Total Earnings" value={`₱${(stats?.totalEarnings ?? 0).toLocaleString()}`} accent />
-        <StatCard label="Paid Redemptions" value={String(stats?.paidRedemptions ?? 0)} />
-        <StatCard label="Total Redemptions" value={String(stats?.totalRedemptions ?? 0)} />
-      </div>
+      {totalsByCurrency && Object.keys(totalsByCurrency).length > 0 ? (
+        <div className="mb-6 space-y-4">
+          {Object.entries(totalsByCurrency).map(([currency, totals]) => (
+            <div key={currency}>
+              <h2 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">{currency} Totals</h2>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <StatCard label="Earned" value={money(totals.earned, currency)} accent />
+                <StatCard label="Paid Out" value={money(totals.paidOut, currency)} />
+                <StatCard label="Unpaid" value={money(totals.unpaid, currency)} />
+                <StatCard label="Sales" value={money(totals.sales, currency)} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <StatCard label="Total Earnings" value={`₱${(stats?.totalEarnings ?? 0).toLocaleString()}`} accent />
+          <StatCard label="Paid Redemptions" value={String(stats?.paidRedemptions ?? 0)} />
+          <StatCard label="Total Redemptions" value={String(stats?.totalRedemptions ?? 0)} />
+        </div>
+      )}
 
       <section className="mb-6 rounded-2xl border border-white/10 bg-white/[.03] p-5 shadow-2xl">
         <h2 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-400">Your Coupon Code</h2>
@@ -254,9 +300,16 @@ export default function AffiliateDashboardPage() {
                     <div className="font-bold">{c.name}</div>
                     <div className="mt-0.5 text-xs text-slate-400">
                       {c.stats?.paidCount ?? 0} paid sales
-                      {(c.stats?.commissionTotal ?? 0) > 0 && (
-                        <> · ₱{Number(c.stats?.commissionTotal ?? 0).toLocaleString()} earned</>
+                      {c.currency && (c.stats?.commissionTotal ?? 0) > 0 && (
+                        <> · {money(c.stats?.commissionTotal ?? 0, c.currency)} earned</>
                       )}
+                      {!c.currency &&
+                        c.statsByCurrency &&
+                        Object.entries(c.statsByCurrency)
+                          .filter(([, s]) => (s.commissionTotal ?? 0) > 0)
+                          .map(([currency, s]) => (
+                            <span key={currency}> · {money(s.commissionTotal, currency)} earned</span>
+                          ))}
                     </div>
                     {c.notes && <div className="mt-0.5 text-xs text-slate-400">{c.notes}</div>}
                   </div>
@@ -389,26 +442,44 @@ export default function AffiliateDashboardPage() {
           <table className="w-full text-xs">
             <thead>
               <tr className="text-left text-[10px] uppercase tracking-wide text-slate-400">
+                <th className="p-2">Channel</th>
                 <th className="p-2">Payment Ref</th>
                 <th className="p-2">Sale Amount</th>
                 <th className="p-2">Customer Discount</th>
                 <th className="p-2">Your Commission</th>
                 <th className="p-2">Status</th>
+                <th className="p-2">Payout</th>
                 <th className="p-2">Date</th>
               </tr>
             </thead>
             <tbody>
               {redemptions.length === 0 && (
-                <tr><td colSpan={6} className="p-2 text-slate-400">No redemptions yet — share your code to get started.</td></tr>
+                <tr><td colSpan={8} className="p-2 text-slate-400">No redemptions yet — share your code to get started.</td></tr>
               )}
               {redemptions.map((r) => (
                 <tr key={r.id} className="border-t border-white/10">
+                  <td className="p-2">
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] ${r.channel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
+                      {r.channel === "global" ? "Global" : "Local"}
+                    </span>
+                  </td>
                   <td className="p-2">{r.paymentReference}</td>
-                  <td className="p-2">₱{Number(r.baseAmount).toLocaleString()}</td>
-                  <td className="p-2">₱{Number(r.discountAmount).toLocaleString()}</td>
-                  <td className="p-2 font-bold text-emerald-300">₱{Number(r.affiliateFeeAmount).toLocaleString()}</td>
+                  <td className="p-2">{money(r.baseAmount, r.currency)}</td>
+                  <td className="p-2">{money(r.discountAmount, r.currency)}</td>
+                  <td className="p-2 font-bold text-emerald-300">{money(r.affiliateFeeAmount, r.currency)}</td>
                   <td className="p-2">
                     <span className={`rounded-full border px-2 py-0.5 ${statusPill(r.status)}`}>{r.status}</span>
+                  </td>
+                  <td className="p-2">
+                    {r.refundedAt ? (
+                      <span className="font-bold text-red-300">Refunded</span>
+                    ) : r.affiliatePaidAt ? (
+                      <span className="text-emerald-300">Paid {new Date(r.affiliatePaidAt).toLocaleDateString()}</span>
+                    ) : r.needsReview ? (
+                      <span className="font-bold text-amber-300">Needs review</span>
+                    ) : (
+                      <span className="text-slate-400">Unpaid</span>
+                    )}
                   </td>
                   <td className="p-2">{new Date(r.createdAt).toLocaleDateString()}</td>
                 </tr>

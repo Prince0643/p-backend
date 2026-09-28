@@ -1,5 +1,5 @@
 require('./setupEnv');
-const { test, after } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -8,12 +8,19 @@ const request = require('supertest');
 const app = require('../index');
 const pool = require('../db/pool');
 const couponStore = require('../utils/couponStore');
-const { createTestCoupon, cleanupCoupon, signWebhookBody, paymentEventPayload } = require('./fixtures');
+const { createTestCoupon, cleanupCoupon, signWebhookBody, paymentEventPayload, createTestCampaignSite, cleanupCampaignSite } = require('./fixtures');
 
 const ADMIN_KEY = process.env.ADMIN_API_KEY;
 const PRODUCT_ID = 'test_product';
-const ALLOWED_URL = 'https://nexistryacademy.com/offer';
 const hasPaymongoKey = Boolean(process.env.PAYMONGO_SECRET_KEY);
+
+let SITE;
+let ALLOWED_URL;
+
+before(async () => {
+    SITE = await createTestCampaignSite({ name: 'Attribution Test Site', channel: 'local' });
+    ALLOWED_URL = `${SITE.url}/offer`;
+});
 
 function basePayload(overrides = {}) {
     return {
@@ -29,7 +36,7 @@ async function createTestCampaign({ couponCode, active = true, name = 'Attributi
     const res = await request(app)
         .post('/api/admin/campaigns')
         .set('x-api-key', ADMIN_KEY)
-        .send({ name, couponCode, destinationUrl: ALLOWED_URL, active });
+        .send({ name, couponCode, destinationUrl: ALLOWED_URL, active, siteId: SITE.id });
     assert.equal(res.status, 201, JSON.stringify(res.body));
     return res.body.campaign;
 }
@@ -256,6 +263,12 @@ test(
             assert.equal(statsRes.body.campaign.stats.paidCount, 1);
             assert.equal(statsRes.body.campaign.stats.revenue, createRes.body.baseAmount);
             assert.ok(statsRes.body.campaign.stats.commissionTotal > 0);
+
+            // Single-currency campaign: `currency` resolves to the one currency involved,
+            // and statsByCurrency[currency] matches the scalar `stats` fields exactly.
+            assert.equal(statsRes.body.campaign.currency, 'PHP');
+            assert.ok(statsRes.body.campaign.statsByCurrency.PHP);
+            assert.deepEqual(statsRes.body.campaign.statsByCurrency.PHP, statsRes.body.campaign.stats);
         } finally {
             await cleanupCampaign(campaignId);
             await cleanupCoupon(code);
@@ -550,5 +563,6 @@ test('couponStore.recordRedemption falls back to campaign_id null on a foreign-k
 });
 
 after(async () => {
+    await cleanupCampaignSite(SITE?.id);
     await pool.end();
 });

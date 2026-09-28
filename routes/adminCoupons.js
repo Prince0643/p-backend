@@ -10,6 +10,7 @@ router.get('/coupons/ghl', adminCouponsController.listGhlCoupons);
 router.post('/coupons/ghl/sync', adminCouponsController.syncGhlCoupons);
 router.get('/coupons/redemptions', adminCouponsController.listRedemptions);
 router.post('/coupons/redemptions/mark-paid', adminCouponsController.markRedemptionsPaid);
+router.post('/coupons/ghl/import-orders', adminCouponsController.importGhlOrders);
 router.get('/coupons/:code', adminCouponsController.getOne);
 router.post('/coupons', adminCouponsController.upsert);
 router.put('/coupons/:code', adminCouponsController.upsert);

@@ -31,7 +31,34 @@ type Redemption = {
   affiliateEmail: string;
   status: string;
   createdAt: string;
+  source: "paymongo" | "ghl";
+  channel: "local" | "global";
+  currency: string;
+  affiliatePaidAt: string | null;
+  needsReview: boolean;
+  refundedAt: string | null;
 };
+
+type ImportOrdersSummary = {
+  scanned: number;
+  imported: number;
+  refunded: number;
+  flagged: number;
+  skipped: { noCoupon: number; invoice: number; unknownCode: number; noAffiliate: number; test: number };
+  errors: unknown[];
+};
+
+function money(value: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(currency === "USD" ? "en-US" : "en-PH", {
+      style: "currency",
+      currency: currency || "PHP",
+      maximumFractionDigits: 2,
+    }).format(Number(value) || 0);
+  } catch {
+    return `${currency || ""} ${Number(value) || 0}`.trim();
+  }
+}
 
 type GhlCoupon = {
   id: string;
@@ -102,7 +129,9 @@ export default function CouponsPage() {
 
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
+  const [payoutFilter, setPayoutFilter] = useState("");
   const [selectedRedemptionIds, setSelectedRedemptionIds] = useState<Set<string>>(new Set());
+  const [importingOrders, setImportingOrders] = useState(false);
   const [ghlCoupons, setGhlCoupons] = useState<GhlCoupon[]>([]);
   const [ghlErrors, setGhlErrors] = useState<GhlCouponError[]>([]);
   const [ghlStatusFilter, setGhlStatusFilter] = useState("");
@@ -116,10 +145,11 @@ export default function CouponsPage() {
     setCoupons(data.coupons || []);
   }, []);
 
-  const loadRedemptions = useCallback(async (key: string, code: string | null, status: string) => {
+  const loadRedemptions = useCallback(async (key: string, code: string | null, status: string, payout: string) => {
     const params = new URLSearchParams();
     if (status) params.set("status", status);
     if (code) params.set("code", code);
+    if (payout) params.set("payout", payout);
     const data = await apiFetch<{ redemptions: Redemption[] }>(
       `/api/admin/coupons/redemptions${params.toString() ? `?${params}` : ""}`,
       key
@@ -145,7 +175,7 @@ export default function CouponsPage() {
     if (!key) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
     loadCoupons(key).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
-    loadRedemptions(key, null, "").catch((e) => { if (!handleAuthError(e)) toast(e.message); });
+    loadRedemptions(key, null, "", "").catch((e) => { if (!handleAuthError(e)) toast(e.message); });
     setLoadingGhlCoupons(true);
     loadGhlCoupons(key, "", "")
       .catch((e) => { if (!handleAuthError(e)) toast(e.message); })
@@ -173,7 +203,7 @@ export default function CouponsPage() {
     if (!key) return;
     try {
       await loadCoupons(key);
-      await loadRedemptions(key, selectedCode, statusFilter);
+      await loadRedemptions(key, selectedCode, statusFilter, payoutFilter);
       await loadGhlCoupons(key, ghlStatusFilter, ghlSearch);
       toast("Refreshed.");
     } catch (e) {
@@ -231,7 +261,7 @@ export default function CouponsPage() {
     const key = requireAuth();
     if (!key) return;
     try {
-      await loadRedemptions(key, selectedCode, statusFilter);
+      await loadRedemptions(key, selectedCode, statusFilter, payoutFilter);
       toast("Loaded redemptions.");
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
@@ -271,7 +301,7 @@ export default function CouponsPage() {
 
   async function handleMarkPaid() {
     if (selectedRedemptionIds.size === 0) return toast("Select at least one redemption.");
-    if (!confirm(`Mark ${selectedRedemptionIds.size} redemption(s) as paid?`)) return;
+    if (!confirm(`Mark ${selectedRedemptionIds.size} redemption(s) as paid out?`)) return;
     const key = requireAuth();
     if (!key) return;
     try {
@@ -279,12 +309,18 @@ export default function CouponsPage() {
         method: "POST",
         body: { ids: Array.from(selectedRedemptionIds) },
       });
-      toast("Marked as paid.");
+      toast("Marked as paid out.");
       setSelectedRedemptionIds(new Set());
-      await loadRedemptions(key, selectedCode, statusFilter);
+      await loadRedemptions(key, selectedCode, statusFilter, payoutFilter);
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
     }
+  }
+
+  // Payout can only be marked for redemptions whose CUSTOMER payment already
+  // cleared (status 'paid') and that haven't been paid out to the affiliate yet.
+  function canSelectForPayout(r: Redemption) {
+    return r.status === "paid" && !r.affiliatePaidAt;
   }
 
   function toggleRedemption(id: string) {
@@ -294,6 +330,28 @@ export default function CouponsPage() {
       else next.add(id);
       return next;
     });
+  }
+
+  async function handleImportOrders() {
+    const key = requireAuth();
+    if (!key) return;
+    setImportingOrders(true);
+    try {
+      const data = await apiFetch<{ summary: ImportOrdersSummary }>("/api/admin/coupons/ghl/import-orders", key, {
+        method: "POST",
+        body: {},
+      });
+      const s = data.summary;
+      toast(
+        `Imported ${s.imported} of ${s.scanned} scanned` +
+          `${s.refunded ? `, ${s.refunded} refunded` : ""}${s.flagged ? `, ${s.flagged} flagged` : ""}.`
+      );
+      await loadRedemptions(key, selectedCode, statusFilter, payoutFilter);
+    } catch (e) {
+      if (!handleAuthError(e)) toast((e as Error).message);
+    } finally {
+      setImportingOrders(false);
+    }
   }
 
   const filtered = coupons.filter((c) => {
@@ -424,17 +482,31 @@ export default function CouponsPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Redemptions &amp; Affiliate Payouts</h2>
             <div className="flex flex-wrap gap-2">
-              <select className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <label className="sr-only" htmlFor="redemption-status-filter">Filter by customer payment status</label>
+              <select id="redemption-status-filter" className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <option value="">All statuses</option>
                 <option value="pending">Pending</option>
                 <option value="paid">Paid</option>
                 <option value="released">Released</option>
               </select>
+              <label className="sr-only" htmlFor="redemption-payout-filter">Filter by affiliate payout status</label>
+              <select id="redemption-payout-filter" className="input" value={payoutFilter} onChange={(e) => setPayoutFilter(e.target.value)}>
+                <option value="">All payouts</option>
+                <option value="unpaid">Unpaid</option>
+                <option value="paid">Paid out</option>
+              </select>
               <button onClick={handleLoadRedemptions} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold">
                 Load
               </button>
+              <button
+                onClick={handleImportOrders}
+                disabled={importingOrders}
+                className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-sm font-bold text-cyan-100 disabled:opacity-60"
+              >
+                {importingOrders ? "Importing…" : "Import Global Sales"}
+              </button>
               <button onClick={handleMarkPaid} className="rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm font-extrabold text-slate-950">
-                Mark Selected Paid
+                Mark Selected Paid Out
               </button>
             </div>
           </div>
@@ -443,6 +515,7 @@ export default function CouponsPage() {
               <thead>
                 <tr className="text-left text-[10px] uppercase tracking-wide text-slate-400">
                   <th className="p-2"></th>
+                  <th className="p-2">Source</th>
                   <th className="p-2">Code</th>
                   <th className="p-2">Payment Ref</th>
                   <th className="p-2">Customer</th>
@@ -450,37 +523,58 @@ export default function CouponsPage() {
                   <th className="p-2">Discount</th>
                   <th className="p-2">Affiliate Fee</th>
                   <th className="p-2">Status</th>
+                  <th className="p-2">Payout</th>
                   <th className="p-2">Date</th>
                 </tr>
               </thead>
               <tbody>
                 {redemptions.length === 0 && (
-                  <tr><td colSpan={9} className="p-2 text-slate-400">No redemptions loaded.</td></tr>
+                  <tr><td colSpan={11} className="p-2 text-slate-400">No redemptions loaded.</td></tr>
                 )}
-                {redemptions.map((r) => (
-                  <tr key={r.id} className="border-t border-white/10 hover:bg-white/[.03]">
-                    <td className="p-2">
-                      <input
-                        type="checkbox"
-                        disabled={r.status === "paid"}
-                        checked={selectedRedemptionIds.has(r.id)}
-                        onChange={() => toggleRedemption(r.id)}
-                      />
-                    </td>
-                    <td className="p-2">{r.code}</td>
-                    <td className="p-2">{r.paymentReference}</td>
-                    <td className="p-2">
-                      {r.fullName}
-                      <br />
-                      <span className="text-slate-400">{r.email}</span>
-                    </td>
-                    <td className="p-2">₱{Number(r.baseAmount).toLocaleString()}</td>
-                    <td className="p-2">₱{Number(r.discountAmount).toLocaleString()}</td>
-                    <td className="p-2">₱{Number(r.affiliateFeeAmount).toLocaleString()}</td>
-                    <td className={`p-2 ${r.status === "paid" ? "text-emerald-300" : "text-amber-300"}`}>{r.status}</td>
-                    <td className="p-2">{new Date(r.createdAt).toLocaleString()}</td>
-                  </tr>
-                ))}
+                {redemptions.map((r) => {
+                  const selectable = canSelectForPayout(r);
+                  return (
+                    <tr key={r.id} className="border-t border-white/10 hover:bg-white/[.03]">
+                      <td className="p-2">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select redemption ${r.paymentReference} for payout`}
+                          disabled={!selectable}
+                          checked={selectedRedemptionIds.has(r.id)}
+                          onChange={() => toggleRedemption(r.id)}
+                        />
+                      </td>
+                      <td className="p-2">
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${r.channel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
+                          {r.channel === "global" ? "Global" : "Local"}
+                        </span>
+                      </td>
+                      <td className="p-2">{r.code}</td>
+                      <td className="p-2">{r.paymentReference}</td>
+                      <td className="p-2">
+                        {r.fullName}
+                        <br />
+                        <span className="text-slate-400">{r.email}</span>
+                      </td>
+                      <td className="p-2">{money(r.baseAmount, r.currency)}</td>
+                      <td className="p-2">{money(r.discountAmount, r.currency)}</td>
+                      <td className="p-2">{money(r.affiliateFeeAmount, r.currency)}</td>
+                      <td className={`p-2 ${r.status === "paid" ? "text-emerald-300" : "text-amber-300"}`}>{r.status}</td>
+                      <td className="p-2">
+                        {r.refundedAt ? (
+                          <span className="font-bold text-red-300">Refunded</span>
+                        ) : r.affiliatePaidAt ? (
+                          <span className="text-emerald-300">Paid out {new Date(r.affiliatePaidAt).toLocaleDateString()}</span>
+                        ) : r.needsReview ? (
+                          <span className="font-bold text-amber-300">Needs review</span>
+                        ) : (
+                          <span className="text-slate-400">Unpaid</span>
+                        )}
+                      </td>
+                      <td className="p-2">{new Date(r.createdAt).toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

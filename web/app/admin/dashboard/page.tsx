@@ -85,6 +85,27 @@ function money(value: number, currency = "PHP") {
   }).format(Number(value) || 0);
 }
 
+/**
+ * Sums a numeric field across rows, grouped by each row's `currency` (defaulting
+ * to PHP for legacy local-only rows that predate the field). Local (PHP) and
+ * global (USD) amounts must never be added together, so callers render one line
+ * per currency instead of a single combined total.
+ */
+function sumByCurrency<T extends { currency?: string }>(rows: T[], pick: (row: T) => number): Record<string, number> {
+  const totals: Record<string, number> = {};
+  for (const row of rows) {
+    const currency = row.currency || "PHP";
+    totals[currency] = (totals[currency] || 0) + Number(pick(row) || 0);
+  }
+  return totals;
+}
+
+function formatByCurrency(totals: Record<string, number>): string {
+  const entries = Object.entries(totals);
+  if (entries.length === 0) return money(0);
+  return entries.map(([currency, value]) => money(value, currency)).join(" · ");
+}
+
 function shortDate(value: string | null) {
   if (!value) return "Not paid";
   return new Intl.DateTimeFormat("en-PH", {
@@ -236,9 +257,11 @@ export default function AdminDashboardPage() {
     const pending = data.redemptions.filter((r) => r.status === "pending");
     const activeAffiliates = data.affiliates.filter((a) => a.status === "active");
     const activeCoupons = data.coupons.filter((c) => c.active);
-    const weeklyRevenue = weeklyPaid.reduce((sum, r) => sum + Number(r.baseAmount || 0), 0);
-    const weeklyCommission = weeklyPaid.reduce((sum, r) => sum + Number(r.affiliateFeeAmount || 0), 0);
-    const totalCommission = paid.reduce((sum, r) => sum + Number(r.affiliateFeeAmount || 0), 0);
+    // Local (PayMongo/PHP) and global (GHL/USD) redemptions now share this ledger, so
+    // sums are kept per-currency rather than added together (₱ + $ has no meaning).
+    const weeklyRevenue = sumByCurrency(weeklyPaid, (r) => r.baseAmount);
+    const weeklyCommission = sumByCurrency(weeklyPaid, (r) => r.affiliateFeeAmount);
+    const totalCommission = sumByCurrency(paid, (r) => r.affiliateFeeAmount);
     const solutionRevenue = data.transactions
       .filter((t) => t.status === "completed" || t.status === "paid")
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
@@ -267,19 +290,24 @@ export default function AdminDashboardPage() {
           const paidMs = new Date(r.paidAt || r.createdAt).getTime();
           return r.status === "paid" && paidMs >= period.periodStartMs && paidMs < period.periodEndMs;
         });
+        const revenue = sumByCurrency(paid, (r) => r.baseAmount);
+        const commission = sumByCurrency(paid, (r) => r.affiliateFeeAmount);
         return {
           ...affiliate,
           redemptions: redemptions.length,
           paidRedemptions: paid.length,
-          revenue: paid.reduce((sum, r) => sum + Number(r.baseAmount || 0), 0),
-          commission: paid.reduce((sum, r) => sum + Number(r.affiliateFeeAmount || 0), 0),
+          revenue,
+          commission,
+          // Sort-only heuristic: raw sum across currencies (never rendered) just to
+          // order the table, since ranking still needs a single comparable number.
+          commissionSortValue: Object.values(commission).reduce((sum, v) => sum + v, 0),
         };
       })
       .filter((row) => {
         if (!q) return true;
         return `${row.firstName} ${row.lastName} ${row.email} ${row.couponCode} ${row.id}`.toLowerCase().includes(q);
       })
-      .sort((a, b) => b.commission - a.commission || b.paidRedemptions - a.paidRedemptions);
+      .sort((a, b) => b.commissionSortValue - a.commissionSortValue || b.paidRedemptions - a.paidRedemptions);
   }, [data.affiliates, data.redemptions, search, nowMs]);
 
   const recentRedemptions = useMemo(
@@ -314,8 +342,8 @@ export default function AdminDashboardPage() {
             </div>
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <Metric label="Weekly sales" value={String(stats.weeklySales)} detail={`${money(stats.weeklyRevenue)} revenue`} />
-              <Metric label="Weekly commission" value={money(stats.weeklyCommission)} detail={`${money(stats.totalCommission)} all time`} />
+              <Metric label="Weekly sales" value={String(stats.weeklySales)} detail={`${formatByCurrency(stats.weeklyRevenue)} revenue`} />
+              <Metric label="Weekly commission" value={formatByCurrency(stats.weeklyCommission)} detail={`${formatByCurrency(stats.totalCommission)} all time`} />
               <Metric label="Active affiliates" value={String(stats.activeAffiliates)} detail={`${data.affiliates.length} total registered`} />
               <Metric label="Active coupons" value={String(stats.activeCoupons)} detail={`${stats.pendingHolds} pending holds`} />
             </div>
@@ -396,8 +424,8 @@ export default function AdminDashboardPage() {
                         </span>
                       </td>
                       <td className="p-3 text-right font-bold">{row.paidRedemptions}</td>
-                      <td className="p-3 text-right">{money(row.revenue)}</td>
-                      <td className="p-3 text-right font-extrabold text-emerald-200">{money(row.commission)}</td>
+                      <td className="p-3 text-right">{formatByCurrency(row.revenue)}</td>
+                      <td className="p-3 text-right font-extrabold text-emerald-200">{formatByCurrency(row.commission)}</td>
                     </tr>
                   ))}
                   {affiliateRows.length === 0 && (

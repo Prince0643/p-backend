@@ -121,6 +121,66 @@ class GhlService {
         return locations;
     }
 
+    /**
+     * Resolves the "Nexistry Core Global" GHL location (native GHL checkout, USD) from
+     * configured locations, by env GHL_GLOBAL_LOCATION_ID, falling back to
+     * GHL_LOCATION_ID_NEXISTRY_CORE_GLOBAL. Returns null if not configured.
+     */
+    resolveGlobalLocation() {
+        const targetId = process.env.GHL_GLOBAL_LOCATION_ID || process.env.GHL_LOCATION_ID_NEXISTRY_CORE_GLOBAL;
+        if (!targetId) return null;
+        const locations = this.getConfiguredLocations();
+        return locations.find((l) => l.locationId === targetId) || null;
+    }
+
+    /** Lists all products in the Global GHL location, with best-effort price lookup (null if unavailable). */
+    async listGlobalLocationProducts() {
+        const location = this.resolveGlobalLocation();
+        if (!location) {
+            const err = new Error('Global GHL location is not configured');
+            err.statusCode = 502;
+            throw err;
+        }
+
+        const client = this.createClient({ privateKey: location.privateKey, locationId: location.locationId, version: '2021-07-28' });
+        const products = [];
+        let offset = 0;
+        const limit = 100;
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+            const res = await client.get('/products/', { params: { locationId: location.locationId, limit, offset } });
+            const page = Array.isArray(res.data?.products) ? res.data.products : Array.isArray(res.data) ? res.data : [];
+            products.push(...page);
+            if (page.length < limit) break;
+            offset += limit;
+        }
+
+        const withPrices = await Promise.all(products.map(async (p) => {
+            const ref = p._id || p.id;
+            let price = null;
+            let currency = null;
+            const firstPrice = Array.isArray(p.prices) && p.prices.length ? p.prices[0] : null;
+            if (firstPrice) {
+                price = firstPrice.amount ?? null;
+                currency = firstPrice.currency ?? null;
+            } else {
+                try {
+                    const priceRes = await client.get(`/products/${ref}/price`, { params: { locationId: location.locationId } });
+                    const priceData = Array.isArray(priceRes.data?.prices) ? priceRes.data.prices[0] : priceRes.data?.price || priceRes.data;
+                    price = priceData?.amount ?? null;
+                    currency = priceData?.currency ?? null;
+                } catch {
+                    price = null;
+                    currency = null;
+                }
+            }
+            return { ref, name: p.name || '', price, currency };
+        }));
+
+        return withPrices;
+    }
+
     createClient({ privateKey, locationId, version = '2021-07-28' }) {
         return axios.create({
             baseURL: this.baseURL,

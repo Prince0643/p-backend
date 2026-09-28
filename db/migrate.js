@@ -155,6 +155,49 @@ async function importGhlInvoiceSchedules(client) {
     console.log(`GHL invoice schedules imported: ${count}`);
 }
 
+/**
+ * Seeds one campaign_sites row per origin in ALLOWED_ORIGINS, but only when the table
+ * is completely empty - so an admin who deletes a site doesn't have it resurrected on
+ * every redeploy. channel is 'global' for the Nexistry Core Global GHL storefront host,
+ * 'local' for everything else (our PayMongo checkout funnels).
+ */
+async function seedCampaignSites(client) {
+    const { rows: existing } = await client.query('SELECT 1 FROM campaign_sites LIMIT 1');
+    if (existing.length > 0) {
+        console.log('Campaign sites already seeded, skipping.');
+        return;
+    }
+
+    const origins = String(process.env.ALLOWED_ORIGINS || '')
+        .split(',')
+        .map((o) => o.trim())
+        .filter(Boolean);
+
+    let count = 0;
+    for (const origin of origins) {
+        let parsed;
+        try {
+            parsed = new URL(origin);
+        } catch {
+            console.log(`Skipping invalid ALLOWED_ORIGINS entry for campaign site seeding: ${origin}`);
+            continue;
+        }
+        const normalizedUrl = `${parsed.protocol}//${parsed.host}`;
+        const hostname = parsed.hostname.toLowerCase();
+        const channel = hostname === 'nexistrycoreglobal.com' ? 'global' : 'local';
+        const id = `SITE${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+        await client.query(
+            `INSERT INTO campaign_sites (id, name, url, channel, active)
+             VALUES ($1,$2,$3,$4,true)
+             ON CONFLICT (url) DO NOTHING`,
+            [id, hostname, normalizedUrl, channel]
+        );
+        count++;
+    }
+    console.log(`Campaign sites seeded: ${count}`);
+}
+
 async function main() {
     const client = await pool.connect();
     try {
@@ -166,6 +209,7 @@ async function main() {
         await importAffiliates(client);
         await importDigitalSolutions(client);
         await importGhlInvoiceSchedules(client);
+        await seedCampaignSites(client);
         console.log('Migration complete.');
     } finally {
         client.release();
@@ -173,7 +217,11 @@ async function main() {
     }
 }
 
-main().catch((err) => {
-    console.error('Migration failed:', err);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch((err) => {
+        console.error('Migration failed:', err);
+        process.exit(1);
+    });
+}
+
+module.exports = { seedCampaignSites, main };

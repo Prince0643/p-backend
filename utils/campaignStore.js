@@ -5,18 +5,23 @@
 // current destination_url (see buildCampaignLink).
 const pool = require('../db/pool');
 const couponStore = require('./couponStore');
+const campaignSiteStore = require('./campaignSiteStore');
 
 const SLUG_MIN_LENGTH = 2;
 const SLUG_MAX_LENGTH = 60;
 const SLUG_PATTERN = /^[a-z0-9-]+$/;
 
+/**
+ * CAMPAIGN_ALLOWED_DOMAINS is legacy: the allowlist is now "host matches an active
+ * campaign site", but this env var still works as an additional allow when set, for
+ * backward compat with deployments that configured it before campaign sites existed.
+ * Unlike before, there is no hardcoded default list - campaign sites are the primary
+ * mechanism now.
+ */
 function getAllowedDomains() {
     const raw = process.env.CAMPAIGN_ALLOWED_DOMAINS;
-    const list = (raw && raw.trim() ? raw : 'nexistrydigitalsolutions.com,nexistryacademy.com')
-        .split(',')
-        .map((d) => d.trim().toLowerCase())
-        .filter(Boolean);
-    return list;
+    if (!raw || !raw.trim()) return [];
+    return raw.split(',').map((d) => d.trim().toLowerCase()).filter(Boolean);
 }
 
 /** True if hostname equals an allowlisted domain, or is a proper subdomain of one (dot-boundary match). */
@@ -26,10 +31,13 @@ function isAllowedHostname(hostname, allowedDomains) {
 }
 
 /**
- * Validates a destination URL against the domain allowlist and protocol rules.
+ * Validates a destination URL's protocol and host. Host is allowed if it equals (or is
+ * a subdomain of) an ACTIVE campaign site's host, or the legacy CAMPAIGN_ALLOWED_DOMAINS
+ * env list when set. When `requiredHostname` is given (the campaign's chosen site), the
+ * host must match it exactly - a campaign can only point at its own site.
  * Throws a descriptive Error on failure; returns the parsed URL on success.
  */
-function validateDestinationUrl(rawUrl) {
+async function validateDestinationUrl(rawUrl, { requiredHostname } = {}) {
     const value = String(rawUrl || '').trim();
     if (!value) throw new Error('destinationUrl is required');
 
@@ -51,16 +59,31 @@ function validateDestinationUrl(rawUrl) {
         throw new Error('destinationUrl must use https (http is only allowed outside production)');
     }
 
+    if (requiredHostname) {
+        if (parsed.hostname.toLowerCase() !== String(requiredHostname).toLowerCase()) {
+            throw new Error(`destinationUrl host "${parsed.hostname}" must match the selected campaign site's host ("${requiredHostname}")`);
+        }
+        return parsed;
+    }
+
     if (!isProd && isLocalhost) {
         return parsed;
     }
 
     const allowedDomains = getAllowedDomains();
-    if (!isAllowedHostname(parsed.hostname, allowedDomains)) {
-        throw new Error(`destinationUrl host "${parsed.hostname}" is not on the allowed domain list (${allowedDomains.join(', ')})`);
+    if (isAllowedHostname(parsed.hostname, allowedDomains)) {
+        return parsed;
     }
 
-    return parsed;
+    const activeSiteOrigins = await campaignSiteStore.listActiveSiteOrigins();
+    const activeSiteHostnames = activeSiteOrigins.map((o) => {
+        try { return new URL(o).hostname.toLowerCase(); } catch { return null; }
+    }).filter(Boolean);
+    if (isAllowedHostname(parsed.hostname, activeSiteHostnames)) {
+        return parsed;
+    }
+
+    throw new Error(`destinationUrl host "${parsed.hostname}" is not on the allowed domain list (no matching active campaign site)`);
 }
 
 /** Builds the shareable campaign link: destination URL with ref/campaign params set, preserving other params/hash. */
@@ -127,7 +150,10 @@ function rowToCampaign(row) {
         active: row.active,
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString(),
-        link: buildCampaignLink(row.destination_url, row.coupon_code, row.slug)
+        link: buildCampaignLink(row.destination_url, row.coupon_code, row.slug),
+        siteId: row.site_id || null,
+        siteName: row.site_name || null,
+        siteChannel: row.site_channel || null
     };
     if (row.affiliate_id !== undefined) {
         campaign.affiliate = row.affiliate_id
@@ -144,9 +170,11 @@ function rowToCampaign(row) {
 
 const CAMPAIGN_WITH_AFFILIATE_QUERY = `
     SELECT c.*, a.id AS affiliate_id, a.first_name AS affiliate_first_name,
-           a.last_name AS affiliate_last_name, a.email AS affiliate_email
+           a.last_name AS affiliate_last_name, a.email AS affiliate_email,
+           s.name AS site_name, s.channel AS site_channel
     FROM campaigns c
     LEFT JOIN affiliates a ON a.coupon_code = c.coupon_code
+    LEFT JOIN campaign_sites s ON s.id = c.site_id
 `;
 
 const EMPTY_STATS = { paidCount: 0, pendingCount: 0, revenue: 0, discountTotal: 0, commissionTotal: 0 };
@@ -156,6 +184,11 @@ const EMPTY_STATS = { paidCount: 0, pendingCount: 0, revenue: 0, discountTotal: 
  * revenue/discountTotal/commissionTotal are summed over 'paid' rows only; base_amount is
  * already net of discount (computed post-discount pre-tax in paymentController), so
  * revenue does not subtract discount_amount again - matches the admin dashboard convention.
+ *
+ * Kept for backward compatibility: a campaign now can in principle span both LOCAL (PHP)
+ * and GLOBAL (USD) redemptions (e.g. a legacy campaign with no site_id), so these scalar
+ * totals can be a meaningless sum across currencies. Callers that care about currency
+ * correctness should use `statsByCurrency` instead (see fetchCampaignStatsMap below).
  */
 async function fetchCampaignStatsMap(campaignIds) {
     const map = {};
@@ -185,9 +218,56 @@ async function fetchCampaignStatsMap(campaignIds) {
     return map;
 }
 
+/**
+ * Same shape as fetchCampaignStatsMap's per-campaign entry, but grouped by (campaign_id,
+ * currency) - the currency-safe version. Returns a map of campaignId -> { [currency]: stats }.
+ */
+async function fetchCampaignStatsByCurrencyMap(campaignIds) {
+    const map = {};
+    if (!Array.isArray(campaignIds) || campaignIds.length === 0) return map;
+    const { rows } = await pool.query(
+        `SELECT
+            campaign_id,
+            currency,
+            COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
+            COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count,
+            COALESCE(SUM(base_amount) FILTER (WHERE status = 'paid'), 0) AS revenue,
+            COALESCE(SUM(discount_amount) FILTER (WHERE status = 'paid'), 0) AS discount_total,
+            COALESCE(SUM(affiliate_fee_amount) FILTER (WHERE status = 'paid'), 0) AS commission_total
+         FROM coupon_redemptions
+         WHERE campaign_id = ANY($1::text[])
+         GROUP BY campaign_id, currency`,
+        [campaignIds]
+    );
+    for (const row of rows) {
+        if (!map[row.campaign_id]) map[row.campaign_id] = {};
+        map[row.campaign_id][row.currency] = {
+            paidCount: row.paid_count,
+            pendingCount: row.pending_count,
+            revenue: Number(row.revenue),
+            discountTotal: Number(row.discount_total),
+            commissionTotal: Number(row.commission_total)
+        };
+    }
+    return map;
+}
+
 async function attachStats(campaigns) {
-    const statsMap = await fetchCampaignStatsMap(campaigns.map((c) => c.id));
-    return campaigns.map((c) => ({ ...c, stats: statsMap[c.id] || { ...EMPTY_STATS } }));
+    const campaignIds = campaigns.map((c) => c.id);
+    const [statsMap, statsByCurrencyMap] = await Promise.all([
+        fetchCampaignStatsMap(campaignIds),
+        fetchCampaignStatsByCurrencyMap(campaignIds)
+    ]);
+    return campaigns.map((c) => {
+        const statsByCurrency = statsByCurrencyMap[c.id] || {};
+        const currencies = Object.keys(statsByCurrency);
+        return {
+            ...c,
+            stats: statsMap[c.id] || { ...EMPTY_STATS },
+            statsByCurrency,
+            currency: currencies.length === 1 ? currencies[0] : null
+        };
+    });
 }
 
 async function listCampaigns({ couponCode, active } = {}) {
@@ -231,7 +311,17 @@ async function createCampaign(payload) {
     const couponCode = couponStore.toCouponCode(payload.couponCode);
     if (!couponCode) throw new Error('couponCode is required');
 
-    const destination = validateDestinationUrl(payload.destinationUrl);
+    const siteId = String(payload.siteId || '').trim();
+    if (!siteId) throw new Error('siteId is required');
+    const site = await campaignSiteStore.findSiteById(siteId);
+    if (!site) {
+        const err = new Error(`Campaign site "${siteId}" does not exist`);
+        err.statusCode = 400;
+        throw err;
+    }
+    const siteHostname = new URL(site.url).hostname;
+
+    const destination = await validateDestinationUrl(payload.destinationUrl, { requiredHostname: siteHostname });
     const notes = payload.notes ? String(payload.notes) : null;
     const active = payload.active === undefined ? true : Boolean(payload.active);
 
@@ -261,9 +351,9 @@ async function createCampaign(payload) {
 
         const id = generateId();
         await client.query(
-            `INSERT INTO campaigns (id, name, slug, coupon_code, destination_url, notes, active)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-            [id, name, slug, couponCode, destination.toString(), notes, active]
+            `INSERT INTO campaigns (id, name, slug, coupon_code, destination_url, notes, active, site_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [id, name, slug, couponCode, destination.toString(), notes, active, siteId]
         );
 
         await client.query('COMMIT');
@@ -307,8 +397,23 @@ async function updateCampaign(id, payload) {
             }
         }
 
+        let siteId = existing.site_id;
+        let requiredHostname;
+        if (payload.siteId !== undefined) {
+            siteId = String(payload.siteId || '').trim() || null;
+        }
+        if (siteId) {
+            const site = await campaignSiteStore.findSiteById(siteId);
+            if (!site) {
+                const err = new Error(`Campaign site "${siteId}" does not exist`);
+                err.statusCode = 400;
+                throw err;
+            }
+            requiredHostname = new URL(site.url).hostname;
+        }
+
         const destinationUrl = payload.destinationUrl !== undefined
-            ? validateDestinationUrl(payload.destinationUrl).toString()
+            ? (await validateDestinationUrl(payload.destinationUrl, { requiredHostname })).toString()
             : existing.destination_url;
 
         let slug = existing.slug;
@@ -330,9 +435,9 @@ async function updateCampaign(id, payload) {
         const active = payload.active !== undefined ? Boolean(payload.active) : existing.active;
 
         await client.query(
-            `UPDATE campaigns SET name = $2, slug = $3, coupon_code = $4, destination_url = $5, notes = $6, active = $7, updated_at = now()
+            `UPDATE campaigns SET name = $2, slug = $3, coupon_code = $4, destination_url = $5, notes = $6, active = $7, site_id = $8, updated_at = now()
              WHERE id = $1`,
-            [id, name, slug, couponCode, destinationUrl, notes, active]
+            [id, name, slug, couponCode, destinationUrl, notes, active, siteId]
         );
 
         await client.query('COMMIT');

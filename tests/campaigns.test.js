@@ -1,17 +1,27 @@
 require('./setupEnv');
-const { test, after } = require('node:test');
+const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 const app = require('../index');
 const pool = require('../db/pool');
-const { createTestCoupon, cleanupCoupon, cleanupAffiliate } = require('./fixtures');
+const { createTestCoupon, cleanupCoupon, cleanupAffiliate, createTestCampaignSite, cleanupCampaignSite } = require('./fixtures');
 
 const ADMIN_KEY = process.env.ADMIN_API_KEY;
 
 // NODE_ENV is forced to 'test' by setupEnv.js, so the store's "allow http/localhost
-// outside production" branch is active here - use nexistryacademy.com (allowlisted by
-// default) over https to also exercise the normal production-shaped path.
-const ALLOWED_URL = 'https://nexistryacademy.com/offer?utm_source=email';
+// outside production" branch is active here.
+let SITE;
+let ALLOWED_URL;
+
+before(async () => {
+    SITE = await createTestCampaignSite({ name: 'Campaign Test Site', channel: 'local' });
+    ALLOWED_URL = `${SITE.url}/offer?utm_source=email`;
+});
+
+after(async () => {
+    await cleanupCampaignSite(SITE?.id);
+    await pool.end();
+});
 
 async function cleanupCampaign(id) {
     if (!id) return;
@@ -45,16 +55,18 @@ test('creates a campaign and builds the link correctly, preserving existing quer
         const res = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Spring Sale', couponCode: code, destinationUrl: ALLOWED_URL });
-        assert.equal(res.status, 201);
+            .send({ name: 'Spring Sale', couponCode: code, destinationUrl: ALLOWED_URL, siteId: SITE.id });
+        assert.equal(res.status, 201, JSON.stringify(res.body));
         assert.equal(res.body.campaign.name, 'Spring Sale');
         assert.equal(res.body.campaign.slug, 'spring-sale');
         assert.equal(res.body.campaign.couponCode, code);
         assert.equal(res.body.campaign.active, true);
+        assert.equal(res.body.campaign.siteId, SITE.id);
+        assert.equal(res.body.campaign.siteChannel, 'local');
         campaignId = res.body.campaign.id;
 
         const link = new URL(res.body.campaign.link);
-        assert.equal(link.origin + link.pathname, 'https://nexistryacademy.com/offer');
+        assert.equal(link.origin + link.pathname, `${SITE.url}/offer`);
         assert.equal(link.searchParams.get('utm_source'), 'email');
         assert.equal(link.searchParams.get('ref'), code);
         assert.equal(link.searchParams.get('campaign'), 'spring-sale');
@@ -74,9 +86,10 @@ test('overwrites existing ref/campaign params in the destination URL', async () 
             .send({
                 name: 'Overwrite Test',
                 couponCode: code,
-                destinationUrl: `https://nexistryacademy.com/offer?ref=OLDCODE&campaign=old-slug&keep=me`
+                siteId: SITE.id,
+                destinationUrl: `${SITE.url}/offer?ref=OLDCODE&campaign=old-slug&keep=me`
             });
-        assert.equal(res.status, 201);
+        assert.equal(res.status, 201, JSON.stringify(res.body));
         campaignId = res.body.campaign.id;
 
         const link = new URL(res.body.campaign.link);
@@ -89,46 +102,59 @@ test('overwrites existing ref/campaign params in the destination URL', async () 
     }
 });
 
-test('rejects a destination on a foreign domain', async () => {
+test('requires a siteId', async () => {
     const code = await createTestCoupon();
     try {
         const res = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Bad Domain', couponCode: code, destinationUrl: 'https://example.com/offer' });
+            .send({ name: 'No Site', couponCode: code, destinationUrl: ALLOWED_URL });
         assert.equal(res.status, 400);
-        assert.match(res.body.error, /not on the allowed domain list/i);
+        assert.match(res.body.error, /siteId is required/i);
     } finally {
         await cleanupCoupon(code);
     }
 });
 
-test('rejects a look-alike suffix domain (not a real subdomain)', async () => {
+test('rejects an unknown siteId', async () => {
     const code = await createTestCoupon();
     try {
         const res = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Lookalike', couponCode: code, destinationUrl: 'https://evilnexistryacademy.com/offer' });
+            .send({ name: 'Bad Site', couponCode: code, destinationUrl: ALLOWED_URL, siteId: 'SITE_DOES_NOT_EXIST' });
         assert.equal(res.status, 400);
-        assert.match(res.body.error, /not on the allowed domain list/i);
+        assert.match(res.body.error, /does not exist/i);
     } finally {
         await cleanupCoupon(code);
     }
 });
 
-test('allows a real subdomain of an allowlisted domain', async () => {
+test('rejects a destination on a foreign domain (must match the chosen site)', async () => {
     const code = await createTestCoupon();
-    let campaignId;
     try {
         const res = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Subdomain', couponCode: code, destinationUrl: 'https://promo.nexistryacademy.com/offer' });
-        assert.equal(res.status, 201);
-        campaignId = res.body.campaign.id;
+            .send({ name: 'Bad Domain', couponCode: code, destinationUrl: 'https://example.com/offer', siteId: SITE.id });
+        assert.equal(res.status, 400);
+        assert.match(res.body.error, /must match the selected campaign site/i);
     } finally {
-        await cleanupCampaign(campaignId);
+        await cleanupCoupon(code);
+    }
+});
+
+test('rejects a look-alike/subdomain host that does not exactly match the site host', async () => {
+    const code = await createTestCoupon();
+    const foreignHost = `evil${new URL(SITE.url).hostname}`;
+    try {
+        const res = await request(app)
+            .post('/api/admin/campaigns')
+            .set('x-api-key', ADMIN_KEY)
+            .send({ name: 'Lookalike', couponCode: code, destinationUrl: `https://${foreignHost}/offer`, siteId: SITE.id });
+        assert.equal(res.status, 400);
+        assert.match(res.body.error, /must match the selected campaign site/i);
+    } finally {
         await cleanupCoupon(code);
     }
 });
@@ -143,7 +169,7 @@ test('rejects non-https destinations in production', async (t) => {
         const res = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Insecure', couponCode: code, destinationUrl: 'http://nexistryacademy.com/offer' });
+            .send({ name: 'Insecure', couponCode: code, destinationUrl: `http://${new URL(SITE.url).hostname}/offer`, siteId: SITE.id });
         assert.equal(res.status, 400);
         assert.match(res.body.error, /https/i);
     } finally {
@@ -155,7 +181,7 @@ test('rejects an unknown coupon code', async () => {
     const res = await request(app)
         .post('/api/admin/campaigns')
         .set('x-api-key', ADMIN_KEY)
-        .send({ name: 'No Coupon', couponCode: 'NOPE99', destinationUrl: ALLOWED_URL });
+        .send({ name: 'No Coupon', couponCode: 'NOPE99', destinationUrl: ALLOWED_URL, siteId: SITE.id });
     assert.equal(res.status, 400);
     assert.match(res.body.error, /does not exist/i);
 });
@@ -167,14 +193,14 @@ test('rejects a duplicate slug with 409', async () => {
         const first = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Dup Slug', slug: 'dup-slug-test', couponCode: code, destinationUrl: ALLOWED_URL });
+            .send({ name: 'Dup Slug', slug: 'dup-slug-test', couponCode: code, destinationUrl: ALLOWED_URL, siteId: SITE.id });
         assert.equal(first.status, 201);
         firstId = first.body.campaign.id;
 
         const second = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Dup Slug Again', slug: 'dup-slug-test', couponCode: code, destinationUrl: ALLOWED_URL });
+            .send({ name: 'Dup Slug Again', slug: 'dup-slug-test', couponCode: code, destinationUrl: ALLOWED_URL, siteId: SITE.id });
         assert.equal(second.status, 409);
     } finally {
         await cleanupCampaign(firstId);
@@ -189,14 +215,14 @@ test('auto-generated slugs de-duplicate with a numeric suffix', async () => {
         const first = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Repeatable Name', couponCode: code, destinationUrl: ALLOWED_URL });
+            .send({ name: 'Repeatable Name', couponCode: code, destinationUrl: ALLOWED_URL, siteId: SITE.id });
         assert.equal(first.status, 201);
         firstId = first.body.campaign.id;
 
         const second = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Repeatable Name', couponCode: code, destinationUrl: ALLOWED_URL });
+            .send({ name: 'Repeatable Name', couponCode: code, destinationUrl: ALLOWED_URL, siteId: SITE.id });
         assert.equal(second.status, 201);
         secondId = second.body.campaign.id;
 
@@ -218,7 +244,7 @@ test('GET/PUT/DELETE single campaign: 404 on missing, full CRUD works', async ()
         const create = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'CRUD Test', couponCode: code, destinationUrl: ALLOWED_URL });
+            .send({ name: 'CRUD Test', couponCode: code, destinationUrl: ALLOWED_URL, siteId: SITE.id });
         assert.equal(create.status, 201);
         campaignId = create.body.campaign.id;
 
@@ -268,21 +294,21 @@ test('affiliate sees only their own active campaigns', async () => {
         const activeRes = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Affiliate A Active', couponCode: couponA, destinationUrl: ALLOWED_URL, active: true });
+            .send({ name: 'Affiliate A Active', couponCode: couponA, destinationUrl: ALLOWED_URL, active: true, siteId: SITE.id });
         assert.equal(activeRes.status, 201);
         campaignActiveId = activeRes.body.campaign.id;
 
         const inactiveRes = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Affiliate A Inactive', couponCode: couponA, destinationUrl: ALLOWED_URL, active: false });
+            .send({ name: 'Affiliate A Inactive', couponCode: couponA, destinationUrl: ALLOWED_URL, active: false, siteId: SITE.id });
         assert.equal(inactiveRes.status, 201);
         campaignInactiveId = inactiveRes.body.campaign.id;
 
         const otherRes = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Affiliate B Active', couponCode: couponB, destinationUrl: ALLOWED_URL, active: true });
+            .send({ name: 'Affiliate B Active', couponCode: couponB, destinationUrl: ALLOWED_URL, active: true, siteId: SITE.id });
         assert.equal(otherRes.status, 201);
         otherCampaignId = otherRes.body.campaign.id;
 
@@ -302,6 +328,43 @@ test('affiliate sees only their own active campaigns', async () => {
     }
 });
 
+test('campaign stats are grouped by currency; currency is null when a campaign spans more than one', async () => {
+    const code = await createTestCoupon({ discountPercent: 0.1, affiliateFeePercent: 0.1, maxRedemptions: null });
+    let campaignId;
+    const refPhp = `PAYCURR${Date.now()}PHP`;
+    const refUsd = `PAYCURR${Date.now()}USD`;
+    try {
+        const create = await request(app)
+            .post('/api/admin/campaigns')
+            .set('x-api-key', ADMIN_KEY)
+            .send({ name: 'Mixed Currency', couponCode: code, destinationUrl: ALLOWED_URL, siteId: SITE.id });
+        campaignId = create.body.campaign.id;
+
+        await pool.query(
+            `INSERT INTO coupon_redemptions (id, code, payment_reference, base_amount, discount_amount, affiliate_fee_amount, currency, status, campaign_id, paid_at)
+             VALUES ($1,$2,$3,100,10,10,'PHP','paid',$4, now())`,
+            [`RDM${refPhp}`, code, refPhp, campaignId]
+        );
+        await pool.query(
+            `INSERT INTO coupon_redemptions (id, code, payment_reference, base_amount, discount_amount, affiliate_fee_amount, currency, status, campaign_id, source, paid_at)
+             VALUES ($1,$2,$3,50,5,5,'USD','paid',$4,'ghl', now())`,
+            [`RDM${refUsd}`, code, refUsd, campaignId]
+        );
+
+        const res = await request(app).get(`/api/admin/campaigns/${campaignId}`).set('x-api-key', ADMIN_KEY);
+        assert.equal(res.status, 200);
+        assert.equal(res.body.campaign.currency, null);
+        assert.equal(res.body.campaign.statsByCurrency.PHP.revenue, 100);
+        assert.equal(res.body.campaign.statsByCurrency.USD.revenue, 50);
+        // Scalar `stats` stays as the (currency-mixed) sum for backward compatibility.
+        assert.equal(res.body.campaign.stats.revenue, 150);
+    } finally {
+        await pool.query('DELETE FROM coupon_redemptions WHERE payment_reference IN ($1, $2)', [refPhp, refUsd]);
+        await cleanupCampaign(campaignId);
+        await cleanupCoupon(code);
+    }
+});
+
 test('admin GET /campaigns filters by couponCode and active', async () => {
     const code = await createTestCoupon();
     let activeId, inactiveId;
@@ -309,12 +372,12 @@ test('admin GET /campaigns filters by couponCode and active', async () => {
         const a = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Filter Active', couponCode: code, destinationUrl: ALLOWED_URL, active: true });
+            .send({ name: 'Filter Active', couponCode: code, destinationUrl: ALLOWED_URL, active: true, siteId: SITE.id });
         activeId = a.body.campaign.id;
         const b = await request(app)
             .post('/api/admin/campaigns')
             .set('x-api-key', ADMIN_KEY)
-            .send({ name: 'Filter Inactive', couponCode: code, destinationUrl: ALLOWED_URL, active: false });
+            .send({ name: 'Filter Inactive', couponCode: code, destinationUrl: ALLOWED_URL, active: false, siteId: SITE.id });
         inactiveId = b.body.campaign.id;
 
         const byCoupon = await request(app).get(`/api/admin/campaigns?couponCode=${code}`).set('x-api-key', ADMIN_KEY);
@@ -329,8 +392,4 @@ test('admin GET /campaigns filters by couponCode and active', async () => {
         await cleanupCampaign(inactiveId);
         await cleanupCoupon(code);
     }
-});
-
-after(async () => {
-    await pool.end();
 });

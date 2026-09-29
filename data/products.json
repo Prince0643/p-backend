@@ -189,7 +189,7 @@
       "defaults": {
         "paymentMethod": "all",
         "source": "nexistry_academy",
-        "taxRate": 0,
+        "taxRate": 0.1,
         "displaySuffix": ""
       }
     },
@@ -317,7 +317,7 @@
       "defaults": {
         "paymentMethod": "all",
         "source": "next_level_ai_automation",
-        "taxRate": 0,
+        "taxRate": 0.1,
         "displaySuffix": "/next-level-ai-automation"
       }
     },
@@ -329,7 +329,7 @@
       "defaults": {
         "paymentMethod": "all",
         "source": "priority_it_support",
-        "taxRate": 0,
+        "taxRate": 0.1,
         "displaySuffix": "/priority-it-support"
       }
     },
@@ -435,7 +435,7 @@
       "defaults": {
         "paymentMethod": "all",
         "source": "asgard_website",
-        "taxRate": 0,
+        "taxRate": 0.1,
         "displaySuffix": "/asgard-website",
         "successUrl": "https://nexistrydigitalsolutions.com/home",
         "cancelUrl": "https://nexistrydigitalsolutions.com/asgard-website"

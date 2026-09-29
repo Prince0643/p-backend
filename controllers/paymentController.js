@@ -3,7 +3,8 @@ const paymongoService = require('../services/paymongoService');
 const webhookService = require('../services/webhookService');
 const ghlService = require('../services/ghlService');
 const clockistryController = require('./clockistryController');
-const { generateId, validateEmail, validateMobile, calculateTaxedAmount } = require('../utils/helpers');
+const { generateId, validateEmail, validateMobile } = require('../utils/helpers');
+const { computePricing } = require('../utils/pricing');
 const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 const { findProduct } = require('../utils/productCatalog');
 const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleStore');
@@ -87,23 +88,6 @@ exports.createPaymentIntent = async (req, res) => {
         // Generate unique payment reference
         const paymentReference = generateId('PAY');
 
-        const defaultTaxRate = Number(process.env.TAX_RATE ?? 0.10);
-        const coreTaxRate = Number(process.env.NX_CORE_TAX_RATE ?? 0.12);
-
-        const websiteProducts = [
-            'promo_website_fee_one_time',
-            'promo_website_monthly',
-            'promo_website_with_domain'
-        ];
-
-        const resolvedProductId = String(productId || catalogProduct?.id || '');
-
-        const taxRate =
-            source === 'nexistry_core_ph' ||
-            websiteProducts.includes(resolvedProductId)
-                ? coreTaxRate
-                : defaultTaxRate;
-
         // Pricing is always computed server-side from the catalog price + tax rate.
         // A discount is only applied when a valid, active, non-expired promo code is
         // supplied — the client-sent `amount`/`discountAmount` are never trusted for
@@ -149,23 +133,22 @@ exports.createPaymentIntent = async (req, res) => {
             }
         }
 
-        const serverDiscountAmount = appliedCoupon
-            ? Number((productInfo.amount * appliedCoupon.discountPercent).toFixed(2))
-            : 0;
-        const discountedBaseCatalogAmount = Number((productInfo.amount - serverDiscountAmount).toFixed(2));
-
-        const taxed = calculateTaxedAmount(discountedBaseCatalogAmount, taxRate);
-        const finalAmount = Number(taxed.totalAmount.toFixed(2));
-        const baseAmount = Number(taxed.baseAmount.toFixed(2));
-        const taxAmount = Number(taxed.taxAmount.toFixed(2));
-
-        // Full (undiscounted) catalog price, taxed the same way as the actual checkout
-        // amount above. Recurring renewals bill at this full price (the discount only
-        // ever applies to the first payment) - stashed in payment metadata below so the
-        // GHL invoice schedule created after payment.paid can use it instead of the
-        // (possibly discounted) amount actually charged today.
-        const fullPriceTaxed = calculateTaxedAmount(productInfo.amount, taxRate);
-        const fullPriceAmount = Number(fullPriceTaxed.totalAmount.toFixed(2));
+        // Shared with the embed quote endpoint (utils/pricing.js). fullPriceAmount is the
+        // full (undiscounted) catalog price, taxed the same way: recurring renewals bill at
+        // it (the discount only applies to the first payment) - stashed in payment metadata
+        // below for the GHL invoice schedule created after payment.paid.
+        const {
+            taxRate,
+            discountAmount: serverDiscountAmount,
+            baseAmount,
+            taxAmount,
+            finalAmount,
+            fullPriceAmount
+        } = computePricing({
+            product: catalogProduct,
+            source,
+            discountPercent: appliedCoupon ? appliedCoupon.discountPercent : 0
+        });
 
         // Attribute this checkout to a campaign link only once we know an AFFILIATE
         // coupon actually got applied (general coupons used via an affiliate link earn no

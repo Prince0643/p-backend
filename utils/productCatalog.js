@@ -108,6 +108,15 @@ async function findProduct({ productId, productName }) {
     return null;
 }
 
+const PRODUCT_COLUMNS = ['id', 'name', 'amount_php', 'currency', 'billing_type', 'billing_interval', 'default_payment_method', 'default_source', 'default_tax_rate', 'display_suffix', 'success_url', 'cancel_url'];
+
+function productParams(p) {
+    return [
+        p.id, p.name, p.amountPhp, p.currency, p.billingType, p.billingInterval,
+        p.paymentMethod, p.source, p.taxRate, p.displaySuffix, p.successUrl, p.cancelUrl
+    ];
+}
+
 async function upsertProduct(payload) {
     const p = normalizeProductInput(payload);
 
@@ -127,13 +136,41 @@ async function upsertProduct(payload) {
             success_url = EXCLUDED.success_url,
             cancel_url = EXCLUDED.cancel_url,
             updated_at = now()`,
-        [
-            p.id, p.name, p.amountPhp, p.currency, p.billingType, p.billingInterval,
-            p.paymentMethod, p.source, p.taxRate, p.displaySuffix, p.successUrl, p.cancelUrl
-        ]
+        productParams(p)
     );
 
     return findProduct({ productId: p.id });
+}
+
+/** Inserts a new product. Returns null when the id already exists. */
+async function createProduct(payload) {
+    const p = normalizeProductInput(payload);
+    const { rowCount } = await pool.query(
+        `INSERT INTO products (${PRODUCT_COLUMNS.join(', ')}, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+         ON CONFLICT (id) DO NOTHING`,
+        productParams(p)
+    );
+    return rowCount > 0 ? findProduct({ productId: p.id }) : null;
+}
+
+/**
+ * Updates an existing product in place. The id is FROZEN: it always comes from the
+ * caller (the URL), never re-slugged from the name. Returns null when it doesn't exist.
+ */
+async function updateProduct(id, payload) {
+    const existing = await findProduct({ productId: id });
+    if (!existing) return null;
+    const p = normalizeProductInput({ ...payload, id: existing.id });
+    await pool.query(
+        `UPDATE products SET
+            name = $2, amount_php = $3, currency = $4, billing_type = $5, billing_interval = $6,
+            default_payment_method = $7, default_source = $8, default_tax_rate = $9,
+            display_suffix = $10, success_url = $11, cancel_url = $12, updated_at = now()
+         WHERE id = $1`,
+        productParams(p)
+    );
+    return findProduct({ productId: existing.id });
 }
 
 async function deleteProduct(productId) {
@@ -212,6 +249,8 @@ module.exports = {
     listProducts,
     findProduct,
     upsertProduct,
+    createProduct,
+    updateProduct,
     deleteProduct,
     buildHtmlSnippet
 };

@@ -1,0 +1,133 @@
+// controllers/embedController.js
+// Public embed API. Never trusts client pricing or redirect URLs.
+const { findProduct } = require('../utils/productCatalog');
+const couponStore = require('../utils/couponStore');
+const { computePricing } = require('../utils/pricing');
+const { createPaymentIntent } = require('./paymentController');
+
+const money = (n) => Number(Number(n).toFixed(2));
+const str = (v, max = 500) => (v == null ? '' : String(v).trim().slice(0, max));
+
+function billingOf(product) {
+    return {
+        type: product.billing.type,
+        interval: product.billing.type === 'recurring' ? product.billing.interval || 'monthly' : null
+    };
+}
+
+// Only fetches by id (never by name) so the public surface can't be used to enumerate.
+async function lookupProduct(rawId) {
+    const productId = str(rawId, 120);
+    if (!productId) return { status: 400, error: 'productId is required' };
+    const product = await findProduct({ productId });
+    if (!product) return { status: 404, error: 'Product not found' };
+    return { product };
+}
+
+exports.getProduct = async (req, res) => {
+    try {
+        const found = await lookupProduct(req.params.id);
+        if (found.error) return res.status(found.status).json({ error: found.error });
+        const { product } = found;
+        res.json({
+            product: {
+                id: product.id,
+                name: product.name,
+                currency: product.currency,
+                amountPhp: product.amountPhp,
+                taxRate: computePricing({ product, source: product.defaults.source }).taxRate,
+                billing: billingOf(product),
+                displaySuffix: product.defaults.displaySuffix || ''
+            }
+        });
+    } catch (err) {
+        console.error('Embed product lookup error:', err);
+        res.status(500).json({ error: 'Failed to load product' });
+    }
+};
+
+exports.quote = async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const found = await lookupProduct(body.productId);
+        if (found.error) return res.status(found.status).json({ error: found.error });
+        const { product } = found;
+
+        const promoCode = str(body.promoCode, 50);
+        let promo = null;
+        let discountPercent = 0;
+        if (promoCode) {
+            // Read-only: same rules as checkout's reservation, but nothing is reserved.
+            const result = await couponStore.validateCouponReadOnly({
+                code: promoCode,
+                productId: product.id,
+                email: str(body.email, 254)
+            });
+            if (result.coupon) {
+                discountPercent = result.coupon.discountPercent;
+                promo = {
+                    code: result.coupon.code,
+                    applied: true,
+                    message: `Promo code applied: ${money(discountPercent * 100)}% off`
+                };
+            } else {
+                promo = { code: promoCode, applied: false, message: result.error || 'Invalid promo code' };
+            }
+        }
+
+        const pricing = computePricing({ product, source: product.defaults.source, discountPercent });
+        const billing = billingOf(product);
+        res.json({
+            productId: product.id,
+            name: product.name,
+            currency: product.currency,
+            billing,
+            displaySuffix: product.defaults.displaySuffix || '',
+            subtotal: money(pricing.catalogAmount),
+            discountPercent,
+            discountAmount: money(pricing.discountAmount),
+            taxRate: pricing.taxRate,
+            taxAmount: money(pricing.taxAmount),
+            total: money(pricing.finalAmount),
+            promo,
+            renewal: billing.type === 'recurring'
+                ? { amount: money(pricing.fullPriceAmount), interval: 'monthly' }
+                : null
+        });
+    } catch (err) {
+        console.error('Embed quote error:', err);
+        res.status(500).json({ error: 'Failed to compute quote' });
+    }
+};
+
+// Delegates to createPaymentIntent with a whitelisted body: client success/cancel URLs
+// (open-redirect guard), amounts, source and paymentMethod are never taken from the
+// request - URLs come from the product/env defaults, source/paymentMethod from the product.
+exports.checkout = async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const productId = str(body.productId, 120);
+        const product = productId ? await findProduct({ productId }) : null;
+        if (!product) {
+            return res.status(400).json({ error: 'Invalid product. Add it in /admin/products first.' });
+        }
+        req.body = {
+            fullName: str(body.fullName, 200),
+            email: str(body.email, 254),
+            mobile: str(body.mobile, 40),
+            productId: product.id,
+            promoCode: str(body.promoCode, 50),
+            businessName: str(body.businessName, 200),
+            notes: str(body.notes, 2000),
+            campaign: str(body.campaign, 100),
+            attributionRef: str(body.attributionRef, 50),
+            referredBy: str(body.referredBy, 200),
+            source: product.defaults.source,
+            paymentMethod: product.defaults.paymentMethod
+        };
+        return await createPaymentIntent(req, res);
+    } catch (err) {
+        console.error('Embed checkout error:', err);
+        res.status(500).json({ error: 'Failed to create payment intent', message: err.message });
+    }
+};

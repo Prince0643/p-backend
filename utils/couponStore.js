@@ -245,6 +245,134 @@ async function deleteCoupon(code) {
 const PENDING_RESERVATION_TTL_MINUTES = 30;
 
 /**
+ * The coupon eligibility rules, shared by beginCouponReservation (mutating: runs inside
+ * the reservation transaction, on a locked coupon row) and validateCouponReadOnly
+ * (read-only quote path). `db` is a pg client or the pool. With `mutate: true` it also
+ * supersedes the customer's own still-fresh pending holds and REQUIRES an email; with
+ * `mutate: false` it writes nothing and per-customer rules apply only when an email is
+ * given. Returns { coupon } or { error, reason }.
+ */
+async function checkCouponRules(db, { couponRow, normalizedCode, productId, normalizedEmail, mutate }) {
+    if (!couponRow) return { error: 'Invalid promo code', reason: 'not_found' };
+
+    if (!couponRow.active) return { error: 'This promo code is no longer active', reason: 'inactive' };
+
+    if (couponRow.expires_at && new Date(couponRow.expires_at).getTime() < Date.now()) {
+        return { error: 'This promo code has expired', reason: 'expired' };
+    }
+
+    // General (non-affiliate) coupons imported from GHL, or otherwise scoped away from
+    // the Local funnel, are treated as an invalid code here.
+    if (couponRow.type !== 'affiliate' && couponRow.local_enabled === false) {
+        return { error: 'This coupon is not valid for this checkout.', reason: 'not_local_enabled' };
+    }
+
+    // Applying ANY coupon requires an email, so the per-customer rules below have
+    // something to key on. The checkout itself already requires email as a top-level
+    // field - this only matters if a caller reaches this path without one.
+    if (mutate && !normalizedEmail) {
+        return { error: 'An email address is required to apply a coupon', reason: 'email_required' };
+    }
+
+    const { rows: productRows } = await db.query(
+        'SELECT product_id FROM coupon_products WHERE coupon_code = $1',
+        [normalizedCode]
+    );
+    const productIds = productRows.map((r) => r.product_id);
+    if (productIds.length > 0 && productId && !productIds.includes(productId)) {
+        return { error: 'This promo code is not valid for the selected product', reason: 'product_not_eligible' };
+    }
+
+    if (normalizedEmail) {
+        if (couponRow.type === 'affiliate') {
+            // Affiliate codes have no total redemption cap, but a given customer may only
+            // ever get ONE affiliate discount, across ALL affiliate codes (Local or
+            // Global-imported). The coupon-row lock only serializes concurrent
+            // checkouts for THIS code, so also take an advisory lock keyed on the
+            // customer's email to serialize concurrent checkouts across different
+            // affiliate codes for the same customer.
+            if (mutate) {
+                await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [normalizedEmail]);
+
+                // This same customer's own still-fresh, unpaid attempt(s) - at any affiliate
+                // code - are abandoned/superseded by this new checkout, not a second use: a
+                // customer who opens checkout, abandons the PayMongo page, and retries within
+                // the TTL must not be blocked by their own dangling 'pending' row. Once
+                // superseded, only a genuinely PAID prior use blocks them below.
+                await db.query(
+                    `UPDATE coupon_redemptions cr
+                     SET status = 'released', released_at = now()
+                     FROM coupons c2
+                     WHERE cr.code = c2.code AND c2.type = 'affiliate'
+                       AND lower(cr.email) = $1
+                       AND cr.status = 'pending'
+                       AND cr.created_at > now() - $2::interval`,
+                    [normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
+                );
+            }
+
+            const { rows: priorRows } = await db.query(
+                `SELECT 1 FROM coupon_redemptions cr
+                 JOIN coupons c2 ON c2.code = cr.code
+                 WHERE c2.type = 'affiliate'
+                   AND lower(cr.email) = $1
+                   AND cr.status = 'paid'
+                 LIMIT 1`,
+                [normalizedEmail]
+            );
+            if (priorRows.length > 0) {
+                return { error: 'You have already used an affiliate discount.', reason: 'affiliate_already_used' };
+            }
+        } else {
+            // Same idea as above, scoped to just this one code (the general-coupon rule
+            // is per-code, not cross-code): the coupon-row FOR UPDATE lock already
+            // serializes this against concurrent checkouts for the same code.
+            if (mutate) {
+                await db.query(
+                    `UPDATE coupon_redemptions
+                     SET status = 'released', released_at = now()
+                     WHERE code = $1
+                       AND lower(email) = $2
+                       AND status = 'pending'
+                       AND created_at > now() - $3::interval`,
+                    [normalizedCode, normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
+                );
+            }
+
+            const { rows: priorRows } = await db.query(
+                `SELECT 1 FROM coupon_redemptions
+                 WHERE code = $1
+                   AND lower(email) = $2
+                   AND status = 'paid'
+                 LIMIT 1`,
+                [normalizedCode, normalizedEmail]
+            );
+            if (priorRows.length > 0) {
+                return { error: 'You have already used this coupon.', reason: 'coupon_already_used' };
+            }
+        }
+    }
+
+    if (couponRow.max_redemptions != null) {
+        // The customer's own pending holds are excluded: on the mutating path they were
+        // just released above (a no-op here), and on the read-only path they would be
+        // superseded by the real checkout, so they must not block the quote either.
+        const { rows: countRows } = await db.query(
+            `SELECT COUNT(*)::int AS count FROM coupon_redemptions
+             WHERE code = $1
+               AND (status = 'paid' OR (status = 'pending' AND created_at > now() - $2::interval
+                                        AND ($3::text IS NULL OR lower(coalesce(email, '')) <> $3)))`,
+            [normalizedCode, `${PENDING_RESERVATION_TTL_MINUTES} minutes`, normalizedEmail || null]
+        );
+        if (countRows[0].count >= couponRow.max_redemptions) {
+            return { error: 'This promo code has reached its redemption limit', reason: 'max_redemptions_reached' };
+        }
+    }
+
+    return { coupon: rowToCoupon(couponRow, productIds) };
+}
+
+/**
  * Begins a coupon reservation for checkout. Locks the coupon row (FOR UPDATE) and
  * validates + counts existing holds against max_redemptions inside an open
  * transaction, so two concurrent checkouts for the same maxRedemptions:1 coupon
@@ -260,129 +388,38 @@ async function beginCouponReservation({ code, productId, email }) {
     const normalizedEmail = normalizeEmail(email);
 
     const client = await pool.connect();
-    const fail = async (error, reason) => {
-        await client.query('ROLLBACK').catch(() => {});
-        client.release();
-        return { error, reason };
-    };
-
     try {
         await client.query('BEGIN');
 
         const { rows: couponRows } = await client.query('SELECT * FROM coupons WHERE code = $1 FOR UPDATE', [normalizedCode]);
-        const couponRow = couponRows[0];
-        if (!couponRow) return await fail('Invalid promo code', 'not_found');
-
-        if (!couponRow.active) return await fail('This promo code is no longer active', 'inactive');
-
-        if (couponRow.expires_at && new Date(couponRow.expires_at).getTime() < Date.now()) {
-            return await fail('This promo code has expired', 'expired');
+        const result = await checkCouponRules(client, {
+            couponRow: couponRows[0], normalizedCode, productId, normalizedEmail, mutate: true
+        });
+        if (result.error) {
+            await client.query('ROLLBACK').catch(() => {});
+            client.release();
+            return { error: result.error, reason: result.reason };
         }
-
-        // General (non-affiliate) coupons imported from GHL, or otherwise scoped away from
-        // the Local funnel, are treated as an invalid code here.
-        if (couponRow.type !== 'affiliate' && couponRow.local_enabled === false) {
-            return await fail('This coupon is not valid for this checkout.', 'not_local_enabled');
-        }
-
-        // Applying ANY coupon requires an email, so the per-customer rules below have
-        // something to key on. The checkout itself already requires email as a top-level
-        // field - this only matters if a caller reaches this path without one.
-        if (!normalizedEmail) {
-            return await fail('An email address is required to apply a coupon', 'email_required');
-        }
-
-        const { rows: productRows } = await client.query(
-            'SELECT product_id FROM coupon_products WHERE coupon_code = $1',
-            [normalizedCode]
-        );
-        const productIds = productRows.map((r) => r.product_id);
-        if (productIds.length > 0 && productId && !productIds.includes(productId)) {
-            return await fail('This promo code is not valid for the selected product', 'product_not_eligible');
-        }
-
-        if (couponRow.type === 'affiliate') {
-            // Affiliate codes have no total redemption cap, but a given customer may only
-            // ever get ONE affiliate discount, across ALL affiliate codes (Local or
-            // Global-imported). The coupon-row lock above only serializes concurrent
-            // checkouts for THIS code, so also take an advisory lock keyed on the
-            // customer's email to serialize concurrent checkouts across different
-            // affiliate codes for the same customer.
-            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [normalizedEmail]);
-
-            // This same customer's own still-fresh, unpaid attempt(s) - at any affiliate
-            // code - are abandoned/superseded by this new checkout, not a second use: a
-            // customer who opens checkout, abandons the PayMongo page, and retries within
-            // the TTL must not be blocked by their own dangling 'pending' row. Once
-            // superseded, only a genuinely PAID prior use blocks them below.
-            await client.query(
-                `UPDATE coupon_redemptions cr
-                 SET status = 'released', released_at = now()
-                 FROM coupons c2
-                 WHERE cr.code = c2.code AND c2.type = 'affiliate'
-                   AND lower(cr.email) = $1
-                   AND cr.status = 'pending'
-                   AND cr.created_at > now() - $2::interval`,
-                [normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
-            );
-
-            const { rows: priorRows } = await client.query(
-                `SELECT 1 FROM coupon_redemptions cr
-                 JOIN coupons c2 ON c2.code = cr.code
-                 WHERE c2.type = 'affiliate'
-                   AND lower(cr.email) = $1
-                   AND cr.status = 'paid'
-                 LIMIT 1`,
-                [normalizedEmail]
-            );
-            if (priorRows.length > 0) {
-                return await fail('You have already used an affiliate discount.', 'affiliate_already_used');
-            }
-        } else {
-            // Same idea as above, scoped to just this one code (the general-coupon rule
-            // is per-code, not cross-code): the coupon-row FOR UPDATE lock above already
-            // serializes this against concurrent checkouts for the same code.
-            await client.query(
-                `UPDATE coupon_redemptions
-                 SET status = 'released', released_at = now()
-                 WHERE code = $1
-                   AND lower(email) = $2
-                   AND status = 'pending'
-                   AND created_at > now() - $3::interval`,
-                [normalizedCode, normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
-            );
-
-            const { rows: priorRows } = await client.query(
-                `SELECT 1 FROM coupon_redemptions
-                 WHERE code = $1
-                   AND lower(email) = $2
-                   AND status = 'paid'
-                 LIMIT 1`,
-                [normalizedCode, normalizedEmail]
-            );
-            if (priorRows.length > 0) {
-                return await fail('You have already used this coupon.', 'coupon_already_used');
-            }
-        }
-
-        if (couponRow.max_redemptions != null) {
-            const { rows: countRows } = await client.query(
-                `SELECT COUNT(*)::int AS count FROM coupon_redemptions
-                 WHERE code = $1
-                   AND (status = 'paid' OR (status = 'pending' AND created_at > now() - $2::interval))`,
-                [normalizedCode, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
-            );
-            if (countRows[0].count >= couponRow.max_redemptions) {
-                return await fail('This promo code has reached its redemption limit', 'max_redemptions_reached');
-            }
-        }
-
-        return { client, coupon: rowToCoupon(couponRow, productIds) };
+        return { client, coupon: result.coupon };
     } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
         client.release();
         throw err;
     }
+}
+
+/**
+ * Read-only mirror of beginCouponReservation's rules (same code path, no locks, no
+ * writes, no reservation). `email` is optional: per-customer rules (already-used) are
+ * only evaluated when one is given. Returns { coupon } or { error, reason }.
+ */
+async function validateCouponReadOnly({ code, productId, email }) {
+    const normalizedCode = toCouponCode(code);
+    if (!normalizedCode) return { error: 'No promo code provided', reason: 'no_code' };
+    const { rows } = await pool.query('SELECT * FROM coupons WHERE code = $1', [normalizedCode]);
+    return checkCouponRules(pool, {
+        couponRow: rows[0], normalizedCode, productId, normalizedEmail: normalizeEmail(email), mutate: false
+    });
 }
 
 /** Inserts the pending redemption row and commits the reservation transaction. */
@@ -647,6 +684,7 @@ module.exports = {
     upsertCoupon,
     deleteCoupon,
     beginCouponReservation,
+    validateCouponReadOnly,
     finalizeCouponReservation,
     abortCouponReservation,
     markReservationPaid,

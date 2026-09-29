@@ -1,7 +1,8 @@
 const {
     listProducts,
     findProduct,
-    upsertProduct,
+    createProduct,
+    updateProduct,
     deleteProduct,
     buildHtmlSnippet
 } = require('../utils/productCatalog');
@@ -33,13 +34,27 @@ exports.getOne = async (req, res) => {
     }
 };
 
-exports.upsert = async (req, res) => {
+exports.create = async (req, res) => {
+    let saved;
     try {
-        const saved = await upsertProduct({ ...req.body, id: req.params.id || req.body?.id });
-        res.json({ success: true, product: saved });
+        saved = await createProduct(req.body);
     } catch (err) {
-        res.status(400).json({ error: err.message || 'Failed to save product' });
+        return res.status(400).json({ error: err.message || 'Failed to save product' });
     }
+    if (!saved) return res.status(409).json({ error: 'A product with this id already exists' });
+    res.json({ success: true, product: saved });
+};
+
+// The id in the URL is authoritative and never re-slugged from the name.
+exports.update = async (req, res) => {
+    let saved;
+    try {
+        saved = await updateProduct(req.params.id, req.body);
+    } catch (err) {
+        return res.status(400).json({ error: err.message || 'Failed to save product' });
+    }
+    if (!saved) return res.status(404).json({ error: 'Product not found' });
+    res.json({ success: true, product: saved });
 };
 
 exports.remove = async (req, res) => {

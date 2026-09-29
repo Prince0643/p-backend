@@ -597,3 +597,23 @@ For issues or questions:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2026-03-12 | Initial API documentation |
+
+## Public Embed API (`/api/embed`)
+
+Used by the embeddable checkout widget (`GET /public/nx-embed.js`, served cross-origin) pasted into GoHighLevel custom code. Open CORS (`Access-Control-Allow-Origin: *`, no credentials), JSON bodies up to 32kb, per-IP rate limits (429 `{ error }`): products 120/min, quote 60/min, checkout 15/15min. Prices are always computed server-side; tax precedence is `source === 'nexistry_core_ph'` override, then the product's own `taxRate` (0 allowed), then legacy env fallback (`TAX_RATE`).
+
+### GET `/api/embed/products/:id`
+Lookup by id only. 200 `{ product: { id, name, currency, amountPhp, taxRate, billing: { type, interval }, displaySuffix } }` (`taxRate` is a fraction, e.g. 0.1; `interval` is null for one_time). 404 `{ error: 'Product not found' }`.
+
+### POST `/api/embed/quote`
+Body `{ productId, promoCode?, email?, campaign? }`. Read-only (never reserves a coupon). 200:
+`{ productId, name, currency, billing, displaySuffix, subtotal, discountPercent (fraction), discountAmount, taxRate (fraction), taxAmount, total, promo, renewal }`
+- `promo` is `null` without a code, else `{ code, applied, message }`; an invalid/expired/out-of-scope/already-used code is `applied: false` (never a 400).
+- `renewal` is `null` for one_time, else `{ amount, interval: 'monthly' }` (full taxed price, no discount).
+- 400 if `productId` is missing, 404 for an unknown product.
+
+### POST `/api/embed/checkout`
+Body `{ productId, fullName, email, mobile, promoCode?, businessName?, notes?, campaign?, attributionRef?, referredBy? }`. Delegates to `create-payment-intent` (same response incl. `checkoutUrl`, same error shapes). Client `successUrl`/`cancelUrl`/`source`/`paymentMethod`/`amount` are ignored: redirect URLs come from the product/env defaults, `source` and `paymentMethod` from the product.
+
+### Admin products
+`POST /api/admin/products` creates (id slugged from `name`, or explicit `id`); 409 if the id exists. `PUT /api/admin/products/:id` updates the row with that URL id (id is frozen, never re-slugged on rename); 404 if missing.

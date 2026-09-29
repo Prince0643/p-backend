@@ -24,6 +24,10 @@ const nextConfig: NextConfig = {
               source: "/api/:path*",
               destination: `${EXPRESS_API_URL}/api/:path*`,
             },
+            {
+              source: "/public/:path*",
+              destination: `${EXPRESS_API_URL}/public/:path*`,
+            },
           ];
         },
       }),

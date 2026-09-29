@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
 
+const embedRoutes = require('./routes/embed');
 const paymentRoutes = require('./routes/payments');
 const clockistryRoutes = require('./routes/clockistry');
 const adminProductRoutes = require('./routes/adminProducts');
@@ -26,6 +27,11 @@ app.set('trust proxy', 1);
 app.use(helmet({
     contentSecurityPolicy: false,
 }));
+
+// Public embed API (GHL-pasted widget on arbitrary origins). Mounted BEFORE the global
+// cors()/limiter/json parser below: it carries its own open, credential-less CORS, 32kb
+// body limit and per-endpoint rate limits (see routes/embed.js).
+app.use('/api/embed', embedRoutes);
 
 // CORS configuration - env ALLOWED_ORIGINS (permanent base) union the origins of
 // currently-active campaign_sites (admin-managed storefronts/funnels), cached ~60s in
@@ -76,6 +82,14 @@ app.get('/public/nx-ref.js', (req, res) => {
     res.set('Content-Type', 'application/javascript; charset=utf-8');
     res.set('Cache-Control', 'public, max-age=300');
     res.sendFile(path.join(__dirname, 'public', 'nx-ref.js'));
+});
+
+// Same for the embeddable checkout widget.
+app.get('/public/nx-embed.js', (req, res) => {
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.set('Content-Type', 'application/javascript; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=300');
+    res.sendFile(path.join(__dirname, 'public', 'nx-embed.js'));
 });
 
 // Static files (if needed)

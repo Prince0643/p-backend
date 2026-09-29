@@ -52,7 +52,7 @@ async function cleanupCampaign(id) {
 // ---- (a) empty promoCode + valid attributionRef -> coupon applied + campaign_id set ----
 
 test(
-    'empty promoCode with a valid attributionRef applies the coupon and attributes the campaign',
+    'empty promoCode with a valid attributionRef applies the coupon; campaign attribution is no longer computed, and commission is on the post-discount pre-tax base',
     { skip: hasPaymongoKey ? false : 'requires PAYMONGO_SECRET_KEY to create a real test-mode payment intent' },
     async () => {
         // Campaign attribution now requires an AFFILIATE-type coupon (campaigns apply to
@@ -71,12 +71,15 @@ test(
             assert.equal(res.body.discountAmount, 75); // 500 * 0.15
 
             const { rows } = await pool.query(
-                'SELECT campaign_id, code FROM coupon_redemptions WHERE payment_reference = $1',
+                'SELECT campaign_id, code, commission_base, affiliate_fee_amount FROM coupon_redemptions WHERE payment_reference = $1',
                 [res.body.paymentReference]
             );
             assert.equal(rows.length, 1);
-            assert.equal(rows[0].campaign_id, campaignId);
+            assert.equal(rows[0].campaign_id, null, 'campaign attribution is retired - never set for new sales');
             assert.equal(rows[0].code, code);
+            // 500 catalog - 75 discount = 425 (pre-tax); fee 10% of that, NOT of 500 or 350.
+            assert.equal(Number(rows[0].commission_base), 425);
+            assert.equal(Number(rows[0].affiliate_fee_amount), 42.5);
         } finally {
             await cleanupCampaign(campaignId);
             await cleanupCoupon(code);
@@ -219,7 +222,7 @@ test(
 // ---- (f) webhook payment.paid transitions status and campaign stats reflect it ----
 
 test(
-    'payment.paid webhook confirms the reservation and campaign stats reflect paid count/revenue/commission',
+    'payment.paid webhook confirms the reservation without attributing a campaign (campaign stats stay empty)',
     { skip: hasPaymongoKey ? false : 'requires PAYMONGO_SECRET_KEY to create a real test-mode payment intent' },
     async () => {
         const code = await createTestCoupon({ type: 'affiliate', discountPercent: 0.15, affiliateFeePercent: 0.10 });
@@ -257,21 +260,13 @@ test(
                 [paymentReference]
             );
             assert.equal(rows[0].status, 'paid');
-            assert.equal(rows[0].campaign_id, campaignId);
+            assert.equal(rows[0].campaign_id, null);
 
             const statsRes = await request(app)
                 .get(`/api/admin/campaigns/${campaignId}`)
                 .set('x-api-key', ADMIN_KEY);
             assert.equal(statsRes.status, 200);
-            assert.equal(statsRes.body.campaign.stats.paidCount, 1);
-            assert.equal(statsRes.body.campaign.stats.revenue, createRes.body.baseAmount);
-            assert.ok(statsRes.body.campaign.stats.commissionTotal > 0);
-
-            // Single-currency campaign: `currency` resolves to the one currency involved,
-            // and statsByCurrency[currency] matches the scalar `stats` fields exactly.
-            assert.equal(statsRes.body.campaign.currency, 'PHP');
-            assert.ok(statsRes.body.campaign.statsByCurrency.PHP);
-            assert.deepEqual(statsRes.body.campaign.statsByCurrency.PHP, statsRes.body.campaign.stats);
+            assert.equal(statsRes.body.campaign.stats.paidCount, 0);
         } finally {
             await cleanupCampaign(campaignId);
             await cleanupCoupon(code);

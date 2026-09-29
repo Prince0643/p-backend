@@ -1,12 +1,12 @@
 const affiliateStore = require('../utils/affiliateStore');
 const couponStore = require('../utils/couponStore');
 const { issueToken } = require('../utils/authToken');
-const ghlService = require('../services/ghlService');
+const { pushCouponSafe } = require('../services/ghlCouponPush');
 
 // Flat program-wide rates (see meeting decision: 15% customer discount / 10% affiliate
 // commission for every affiliate, regardless of payout region).
 const AFFILIATE_DISCOUNT_PERCENT = 0.15;
-const AFFILIATE_FEE_PERCENT = 0.10;
+const AFFILIATE_FEE_PERCENT = affiliateStore.AFFILIATE_FEE_PERCENT;
 
 const COUPON_CODE_LENGTH = 6;
 const COUPON_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -50,20 +50,11 @@ exports.register = async (req, res) => {
         });
 
         const affiliate = await affiliateStore.createAffiliate(normalized, couponCode);
-        let ghlCoupon = null;
-        if (ghlService.isConfigured()) {
-            try {
-                ghlCoupon = await ghlService.createCoupon({
-                    name: `${normalized.firstName} ${normalized.lastName} Affiliate`,
-                    code: couponCode,
-                    discountPercent: AFFILIATE_DISCOUNT_PERCENT,
-                    maxRedemptions: null
-                });
-                console.log('GHL affiliate coupon created:', ghlCoupon?._id || ghlCoupon?.id || couponCode);
-            } catch (ghlErr) {
-                console.log('GHL affiliate coupon creation failed (non-fatal):', ghlErr.response?.data || ghlErr.message);
-            }
-        }
+        // Push to GHL GLOBAL + MAIN; non-fatal, failures are recorded per location and
+        // retried by the scheduled order import.
+        const pushOutcome = await pushCouponSafe(couponCode);
+        const pushedIds = (pushOutcome?.results || []).filter((r) => r.ghlCouponId);
+        const ghlCouponId = (pushedIds.find((r) => r.key === 'main') || pushedIds[0])?.ghlCouponId || null;
 
         // Auto-login: registering creates the account AND the login in one step, so
         // the new affiliate lands straight on their dashboard with no separate
@@ -76,7 +67,7 @@ exports.register = async (req, res) => {
             couponCode: affiliate.couponCode,
             discountPercent: AFFILIATE_DISCOUNT_PERCENT,
             affiliateFeePercent: AFFILIATE_FEE_PERCENT,
-            ghlCouponId: ghlCoupon?._id || ghlCoupon?.id || null,
+            ghlCouponId,
             token
         });
     } catch (err) {
@@ -87,8 +78,18 @@ exports.register = async (req, res) => {
 // GET /api/admin/affiliates (admin)
 exports.list = async (req, res) => {
     try {
-        const affiliates = await affiliateStore.listAffiliates();
-        res.json({ success: true, affiliates });
+        const [affiliates, paid] = await Promise.all([
+            affiliateStore.listAffiliates(),
+            couponStore.listPaidAffiliateRedemptions()
+        ]);
+        // totalsByCurrency: { PHP: { sales, commission, earned, paidOut, unpaid }, USD: {...} }
+        const withTotals = affiliates.map((affiliate) => ({
+            ...affiliate,
+            totalsByCurrency: couponStore.affiliateTotalsByCurrency(paid.filter((r) =>
+                String(r.affiliateEmail).toLowerCase() === affiliate.email.toLowerCase()
+                || (affiliate.couponCode && r.code === affiliate.couponCode)))
+        }));
+        res.json({ success: true, affiliates: withTotals });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list affiliates' });
     }
@@ -101,7 +102,8 @@ exports.getOne = async (req, res) => {
         if (!affiliate) return res.status(404).json({ error: 'Affiliate not found' });
 
         const coupon = affiliate.couponCode ? await couponStore.findCoupon(affiliate.couponCode) : null;
-        res.json({ success: true, affiliate, coupon });
+        const redemptions = await couponStore.listRedemptionsForAffiliate({ email: affiliate.email, couponCode: affiliate.couponCode });
+        res.json({ success: true, affiliate, coupon, totalsByCurrency: couponStore.affiliateTotalsByCurrency(redemptions) });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to get affiliate' });
     }

@@ -6,6 +6,7 @@ import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
+import { formatMoney } from "@/lib/money";
 
 type Affiliate = {
   id: string;
@@ -87,6 +88,7 @@ export default function AffiliatesPage() {
   const [detail, setDetail] = useState<Affiliate | null>(null);
   const [coupon, setCoupon] = useState<Coupon | null>(null);
   const [statusChoice, setStatusChoice] = useState<string>("active");
+  const [totals, setTotals] = useState<Record<string, { sales?: number; commission?: number }> | null>(null);
 
   const loadAffiliates = useCallback(async (key: string) => {
     const data = await apiFetch<{ affiliates: Affiliate[] }>("/api/admin/affiliates", key);
@@ -94,12 +96,13 @@ export default function AffiliatesPage() {
   }, []);
 
   const loadDetail = useCallback(async (key: string, id: string) => {
-    const data = await apiFetch<{ affiliate: Affiliate; coupon: Coupon | null }>(
+    const data = await apiFetch<{ affiliate: Affiliate; coupon: Coupon | null; totalsByCurrency?: Record<string, { sales?: number; commission?: number }> }>(
       `/api/admin/affiliates/${encodeURIComponent(id)}`,
       key
     );
     setDetail(data.affiliate);
     setCoupon(data.coupon);
+    setTotals(data.totalsByCurrency || null);
     setStatusChoice(data.affiliate.status);
   }, []);
 
@@ -258,6 +261,15 @@ export default function AffiliatesPage() {
                   Manage in Coupons →
                 </a>
               </DetailCard>
+              {totals && Object.keys(totals).length > 0 && (
+                <DetailCard label="Sales & commission">
+                  {Object.entries(totals).map(([cur, t]) => (
+                    <div key={cur}>
+                      {cur}: {formatMoney(t.sales ?? 0, cur)} sales · {formatMoney(t.commission ?? 0, cur)} commission
+                    </div>
+                  ))}
+                </DetailCard>
+              )}
               <DetailCard label="Registered">{new Date(detail.createdAt).toLocaleString()}</DetailCard>
               <DetailCard label="Terms accepted">
                 {detail.termsAccepted ? `Yes${detail.termsVersion ? ` (v${detail.termsVersion})` : ""}` : "No"}

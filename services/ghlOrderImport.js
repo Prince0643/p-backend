@@ -1,27 +1,38 @@
 // services/ghlOrderImport.js
-// Imports native GHL checkout orders from the "Nexistry Core Global" GHL location
-// (USD, GLOBAL sales channel) into coupon_redemptions, crediting affiliates for sales
-// that never touch our PayMongo checkout. PayMongo (LOCAL) sales are also mirrored into
-// GHL as invoices (see paymentController.js) - those must be skipped here or they'd be
-// double-counted.
+// Imports native GHL checkout orders from BOTH tracked GHL locations - GLOBAL ("Nexistry
+// Core Global", USD) and MAIN - into coupon_redemptions. EVERY paid, live, non-invoice
+// order carrying a coupon code is recorded: buyers are always tracked, and the affiliate
+// is credited (fee on subtotal - discount, pre-tax) only when the coupon has one. Codes
+// we have never seen are auto-created as general, GHL-origin, non-local coupons.
+// PayMongo (LOCAL) sales are also mirrored into MAIN as invoices (see paymentController.js)
+// - those (sourceType 'invoice') must be skipped here or they'd be double-counted.
 const pool = require('../db/pool');
 const ghlService = require('./ghlService');
 const couponStore = require('../utils/couponStore');
+const { retryPendingPushes } = require('./ghlCouponPush');
 
 const NON_BACKFILL_LOOKBACK_DAYS = 45;
 const PAGE_LIMIT = 100;
 // Fixed advisory lock key so overlapping scheduler runs/processes skip instead of racing.
 const ADVISORY_LOCK_KEY = 837_412_905;
 
-function emptySummary(errors = []) {
+function emptyLocationSummary() {
     return {
         scanned: 0,
         imported: 0,
         refunded: 0,
         flagged: 0,
-        skipped: { noCoupon: 0, invoice: 0, unknownCode: 0, noAffiliate: 0, test: 0 },
-        errors
+        couponsCreated: 0,
+        unassigned: 0,
+        wouldImport: 0,
+        wouldCreateCoupons: [],
+        skipped: { noCoupon: 0, invoice: 0, test: 0 },
+        errors: []
     };
+}
+
+function emptySummary(errors = [], { dryRun = false } = {}) {
+    return { ...emptyLocationSummary(), errors, dryRun, locations: {}, pushRetry: null };
 }
 
 function isInvoiceSourced(order) {
@@ -42,45 +53,41 @@ function extractItemProductIds(detail) {
         .filter(Boolean);
 }
 
-/**
- * Finds the single active GLOBAL campaign (if any) whose site sells one of the order's
- * item products. One campaign now applies to every affiliate (no per-campaign coupon
- * filter), so a match here credits the campaign for ANY affiliate-type coupon. Zero or
- * multiple matches -> null (the affiliate is still credited, just without campaign
- * attribution).
- */
-async function findCampaignMatch(itemProductIds) {
-    if (!Array.isArray(itemProductIds) || itemProductIds.length === 0) return null;
-    const { rows } = await pool.query(
-        `SELECT DISTINCT c.id
-         FROM campaigns c
-         JOIN campaign_sites s ON s.id = c.site_id AND s.active = true AND s.channel = 'global'
-         JOIN campaign_site_products csp ON csp.site_id = s.id AND csp.kind = 'ghl' AND csp.ref = ANY($1::text[])
-         WHERE c.active = true`,
-        [itemProductIds]
-    );
-    return rows.length === 1 ? rows[0].id : null;
+/** Finite number or null (so `0` is preserved but missing/garbage falls through to the next source). */
+function toNum(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
 }
 
-/**
- * Looks up the coupon + any linked affiliate for a code. Returns null if the coupon
- * doesn't exist, isn't an affiliate-type coupon (general coupons earn no affiliate
- * credit, even via a Global order), or has no linked affiliate.
- */
-async function resolveAffiliateCoupon(code) {
-    const coupon = await couponStore.findCoupon(code);
-    if (!coupon) return null;
-    if (coupon.type !== 'affiliate') return null;
+const round2 = (n) => Number(n.toFixed(2));
 
+/**
+ * The affiliate credited for a coupon, or null: affiliate-type coupon with an
+ * affiliate_email, or one linked from affiliates.coupon_code. General coupons earn no
+ * affiliate credit.
+ */
+async function resolveAffiliateCoupon(coupon) {
+    if (!coupon || coupon.type !== 'affiliate') return null;
     if (coupon.affiliateEmail) return { coupon, affiliateEmail: coupon.affiliateEmail };
 
-    const { rows } = await pool.query('SELECT email FROM affiliates WHERE coupon_code = $1 LIMIT 1', [couponStore.toCouponCode(code)]);
+    const { rows } = await pool.query('SELECT email FROM affiliates WHERE coupon_code = $1 LIMIT 1', [coupon.code]);
     if (rows[0]) return { coupon, affiliateEmail: rows[0].email };
 
     return null;
 }
 
-async function processPaidOrder(client, order, summary, { coupon, affiliateEmail }) {
+async function processPaidOrder(client, location, order, summary, { dryRun }) {
+    const code = couponStore.toCouponCode(order.couponCode);
+    if (!code) {
+        summary.skipped.noCoupon++;
+        return;
+    }
+
+    // Idempotency: an already-recorded order needs neither a detail fetch nor an insert.
+    const { rowCount: alreadyRecorded } = await pool.query('SELECT 1 FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+    if (alreadyRecorded) return;
+
     let detail;
     try {
         const res = await client.get(`/payments/orders/${order._id}`, { params: { altId: order.altId, altType: 'location' } });
@@ -90,37 +97,64 @@ async function processPaidOrder(client, order, summary, { coupon, affiliateEmail
         return;
     }
 
-    const itemProductIds = extractItemProductIds(detail);
-    // Only reached for affiliate-type coupons (see resolveAffiliateCoupon) - general
-    // coupons never attribute a campaign.
-    const campaignId = await findCampaignMatch(itemProductIds);
+    // markAsTest is only reliably present on the order detail, not the list item.
+    if (detail && isTestOrder(detail)) {
+        summary.skipped.test++;
+        return;
+    }
+
+    let coupon = await couponStore.findCoupon(code);
+    if (!coupon) {
+        if (dryRun) {
+            if (!summary.wouldCreateCoupons.includes(code)) summary.wouldCreateCoupons.push(code);
+        } else {
+            const ghlCoupon = detail?.coupon;
+            const discountPercent = ghlCoupon?.discountType === 'percentage' ? (toNum(ghlCoupon.discountValue) || 0) / 100 : 0;
+            const created = await couponStore.createGhlDiscoveredCoupon({ code, discountPercent, locationId: location.locationId });
+            if (created) summary.couponsCreated++;
+            coupon = await couponStore.findCoupon(code);
+        }
+    } else if (coupon.origin === 'ghl' && !dryRun) {
+        await couponStore.addGhlLocationToCoupon(code, location.locationId);
+    }
+
+    if (dryRun) {
+        summary.wouldImport++;
+        return;
+    }
+
+    const amountSummary = detail?.amountSummary || {};
+    const discount = toNum(amountSummary.discount) ?? toNum(order.discount) ?? 0;
+    const subtotal = toNum(amountSummary.subtotal) ?? toNum(order.subtotal) ?? ((toNum(order.amount) || 0) + discount);
+    const commissionBase = round2(Math.max(subtotal - discount, 0));
+
+    const resolved = await resolveAffiliateCoupon(coupon);
+    const affiliateFeeAmount = resolved ? round2(commissionBase * Number(coupon.affiliateFeePercent || 0)) : 0;
 
     const contact = detail?.contactSnapshot || {};
-    const email = contact.email || order.contactEmail || '';
-    const fullName = contact.name || contact.fullName || order.contactName || '';
-
-    const affiliateFeeAmount = Number((Number(order.amount || 0) * Number(coupon.affiliateFeePercent || 0)).toFixed(2));
-
     const inserted = await couponStore.insertGhlRedemption({
         orderId: order._id,
-        code: order.couponCode,
-        email,
-        fullName,
-        baseAmount: Number(order.amount) || 0,
-        discountAmount: Number(detail?.amountSummary?.discount ?? order.discount ?? 0),
+        code,
+        email: contact.email || order.contactEmail || '',
+        fullName: contact.name || contact.fullName || order.contactName || '',
+        baseAmount: subtotal,
+        discountAmount: discount,
+        commissionBase,
         affiliateFeeAmount,
-        affiliateEmail,
-        currency: order.currency || 'USD',
+        affiliateEmail: resolved ? resolved.affiliateEmail : null,
+        currency: order.currency || detail?.currency || 'USD',
         createdAt: order.createdAt,
-        campaignId,
-        ghlLocationId: order.altId,
-        ghlProductIds: itemProductIds
+        ghlLocationId: order.altId || location.locationId,
+        ghlProductIds: extractItemProductIds(detail)
     });
 
-    if (inserted) summary.imported++;
+    if (inserted) {
+        summary.imported++;
+        if (!resolved) summary.unassigned++;
+    }
 }
 
-async function processOrder(client, order, summary) {
+async function processOrder(client, location, order, summary, opts) {
     summary.scanned++;
 
     if (!order.couponCode) {
@@ -136,21 +170,15 @@ async function processOrder(client, order, summary) {
         return;
     }
 
-    const resolved = await resolveAffiliateCoupon(order.couponCode);
-    if (!resolved) {
-        // Distinguish "coupon doesn't exist at all" from "coupon exists but has no affiliate"
-        const coupon = await couponStore.findCoupon(order.couponCode);
-        if (!coupon) summary.skipped.unknownCode++;
-        else summary.skipped.noAffiliate++;
-        return;
-    }
-
     const paymentStatus = String(order.paymentStatus || '').toLowerCase();
 
     if (paymentStatus === 'paid') {
-        await processPaidOrder(client, order, summary, resolved);
+        await processPaidOrder(client, location, order, summary, opts);
         return;
     }
+
+    // Refund handling only touches rows we already recorded (not_found is a no-op).
+    if (opts.dryRun) return;
 
     if (paymentStatus === 'refunded') {
         const result = await couponStore.applyGhlRefund(order._id);
@@ -167,7 +195,7 @@ async function processOrder(client, order, summary) {
 }
 
 /**
- * Lists orders for the Global location. In non-backfill mode, orders older than the
+ * Lists orders for one GHL location. In non-backfill mode, orders older than the
  * lookback window are skipped rather than imported (recent refunds still need
  * catching, so this can't just look at orders created since the last run) - but we
  * deliberately do NOT stop paginating on the first old order we see. GHL's documented
@@ -202,10 +230,34 @@ async function* iterateOrders(client, location, { backfill }) {
     }
 }
 
-async function importGlobalOrders({ backfill = false } = {}) {
-    const location = ghlService.resolveGlobalLocation();
-    if (!location) {
-        return emptySummary(['Global GHL location is not configured (GHL_GLOBAL_LOCATION_ID / GHL_LOCATION_ID_NEXISTRY_CORE_GLOBAL)']);
+async function importLocationOrders(location, { backfill, dryRun }) {
+    const summary = emptyLocationSummary();
+    try {
+        const client = ghlService.createClient({ privateKey: location.privateKey, locationId: location.locationId, version: '2021-07-28' });
+        for await (const order of iterateOrders(client, location, { backfill })) {
+            try {
+                await processOrder(client, location, order, summary, { dryRun });
+            } catch (err) {
+                summary.errors.push(`Order ${order._id}: ${err.message}`);
+            }
+        }
+    } catch (err) {
+        summary.errors.push(`Failed to list orders: ${err.response?.data?.message || err.message}`);
+    }
+    return summary;
+}
+
+const SUMMED_FIELDS = ['scanned', 'imported', 'refunded', 'flagged', 'couponsCreated', 'unassigned', 'wouldImport'];
+
+/**
+ * Imports orders from both tracked locations (GLOBAL, MAIN). The top-level summary
+ * aggregates both; `locations.<key>` has the per-location breakdown. A failure in one
+ * location never stops the other. `dryRun` reads GHL but writes nothing.
+ */
+async function importGlobalOrders({ backfill = false, dryRun = false } = {}) {
+    const locations = ghlService.getTrackedLocations();
+    if (locations.length === 0) {
+        return emptySummary(['No GHL location is configured (GHL_GLOBAL_LOCATION_ID / GHL_LOCATION_ID_NEXISTRY_CORE_GLOBAL, GHL_LOCATION_ID + GHL_PRIVATE_KEY)'], { dryRun });
     }
 
     const lockClient = await pool.connect();
@@ -214,22 +266,28 @@ async function importGlobalOrders({ backfill = false } = {}) {
         const { rows } = await lockClient.query('SELECT pg_try_advisory_lock($1) AS locked', [ADVISORY_LOCK_KEY]);
         haveLock = Boolean(rows[0]?.locked);
         if (!haveLock) {
-            return emptySummary(['Another GHL order import is already running, skipped this run']);
+            return emptySummary(['Another GHL order import is already running, skipped this run'], { dryRun });
         }
 
-        const summary = emptySummary();
-        const client = ghlService.createClient({ privateKey: location.privateKey, locationId: location.locationId, version: '2021-07-28' });
+        const summary = emptySummary([], { dryRun });
 
-        try {
-            for await (const order of iterateOrders(client, location, { backfill })) {
-                try {
-                    await processOrder(client, order, summary);
-                } catch (err) {
-                    summary.errors.push(`Order ${order._id}: ${err.message}`);
-                }
+        if (!dryRun) {
+            try {
+                summary.pushRetry = await retryPendingPushes();
+            } catch (err) {
+                summary.errors.push(`Affiliate coupon push retry failed: ${err.message}`);
             }
-        } catch (err) {
-            summary.errors.push(`Failed to list orders: ${err.response?.data?.message || err.message}`);
+        }
+
+        for (const location of locations) {
+            const locationSummary = await importLocationOrders(location, { backfill, dryRun });
+            summary.locations[location.key] = { locationId: location.locationId, ...locationSummary };
+            for (const field of SUMMED_FIELDS) summary[field] += locationSummary[field];
+            for (const key of Object.keys(summary.skipped)) summary.skipped[key] += locationSummary.skipped[key];
+            for (const code of locationSummary.wouldCreateCoupons) {
+                if (!summary.wouldCreateCoupons.includes(code)) summary.wouldCreateCoupons.push(code);
+            }
+            summary.errors.push(...locationSummary.errors.map((e) => `[${location.key}] ${e}`));
         }
 
         return summary;

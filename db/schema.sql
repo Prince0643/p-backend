@@ -247,3 +247,18 @@ ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT
 -- Speeds up the per-customer-once affiliate/general coupon lookups in
 -- couponStore.beginCouponReservation (matched by normalized/lowercased email).
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_email_lower ON coupon_redemptions (lower(email));
+
+-- Coupon origin: 'local' = created by us (registration/admin) and pushed to GHL as needed;
+-- 'ghl' = discovered from a native GHL order (never pushed/updated back to GHL).
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE coupons DROP CONSTRAINT IF EXISTS coupons_origin_check;
+ALTER TABLE coupons ADD CONSTRAINT coupons_origin_check CHECK (origin IN ('local', 'ghl'));
+-- Per-location GHL push state for local affiliate coupons, keyed by location key
+-- ('global' | 'main'): { status: 'synced'|'pending'|'error', locationId, ghlCouponId, error, at }.
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS ghl_sync JSONB;
+
+-- The amount the affiliate fee was actually computed on (pre-tax, post-discount).
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS commission_base NUMERIC(12, 2);
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS ghl_order_id TEXT;
+UPDATE coupon_redemptions SET ghl_order_id = substring(payment_reference from 5)
+WHERE source = 'ghl' AND ghl_order_id IS NULL AND payment_reference LIKE 'ghl:%';

@@ -6,6 +6,8 @@ import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
+import { GhlCouponsPanel, CouponUsageModal } from "@/components/GhlCouponsPanel";
+import { formatMoney } from "@/lib/money";
 
 type CouponType = "affiliate" | "general";
 
@@ -61,17 +63,7 @@ type ImportOrdersResponse = Partial<ImportOrdersSummary> & {
   summary?: Partial<ImportOrdersSummary>;
 };
 
-function money(value: number, currency: string) {
-  try {
-    return new Intl.NumberFormat(currency === "USD" ? "en-US" : "en-PH", {
-      style: "currency",
-      currency: currency || "PHP",
-      maximumFractionDigits: 2,
-    }).format(Number(value) || 0);
-  } catch {
-    return `${currency || ""} ${Number(value) || 0}`.trim();
-  }
-}
+const money = formatMoney;
 
 type GhlCoupon = {
   id: string;
@@ -194,6 +186,8 @@ export default function CouponsPage() {
   const [syncingGhlCoupons, setSyncingGhlCoupons] = useState(false);
   const [ghlSyncPlan, setGhlSyncPlan] = useState<GhlSyncResponse | null>(null);
   const [ghlSyncResult, setGhlSyncResult] = useState<GhlSyncResponse | null>(null);
+  const [usageCode, setUsageCode] = useState<string | null>(null);
+  const [panelRefresh, setPanelRefresh] = useState(0);
 
   const loadCoupons = useCallback(async (key: string, type: "" | CouponType) => {
     const params = new URLSearchParams();
@@ -291,6 +285,7 @@ export default function CouponsPage() {
       await loadGhlLocations(key);
       await loadRedemptions(key, selectedCode, statusFilter, payoutFilter);
       await loadGhlCoupons(key, ghlStatusFilter, ghlSearch);
+      setPanelRefresh((n) => n + 1);
       toast("Refreshed.");
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
@@ -611,8 +606,8 @@ export default function CouponsPage() {
         onRefresh={handleRefresh}
         onLogout={logout}
       />
-      <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 pb-28 pt-5 lg:grid-cols-[1fr_1.2fr]">
-        <section className="flex flex-col rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
+      <main className="mx-auto grid w-full min-w-0 max-w-6xl flex-1 grid-cols-1 gap-4 px-5 pb-28 pt-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <section className="flex min-w-0 flex-col rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Coupons</h2>
             <div className="flex flex-wrap gap-2">
@@ -677,15 +672,25 @@ export default function CouponsPage() {
                     </div>
                   )}
                 </div>
-                <div className={`rounded-full border px-2.5 py-1 text-xs ${c.active ? "border-emerald-400/40 text-emerald-200" : "border-red-400/40 text-red-200"}`}>
-                  {c.active ? "Active" : "Inactive"}
+                <div className="flex flex-col items-end gap-1.5">
+                  <div className={`rounded-full border px-2.5 py-1 text-xs ${c.active ? "border-emerald-400/40 text-emerald-200" : "border-red-400/40 text-red-200"}`}>
+                    {c.active ? "Active" : "Inactive"}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setUsageCode(c.code); }}
+                    aria-label={`View usage of ${c.code}`}
+                    className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-bold hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-blue-400"
+                  >
+                    View usage
+                  </button>
                 </div>
               </div>
             ))}
           </div>
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
+        <section className="min-w-0 rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">
               {selectedCode ? `Edit Coupon: ${selectedCode}` : "New Coupon"}
@@ -837,7 +842,7 @@ export default function CouponsPage() {
                 disabled={importingOrders}
                 className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-sm font-bold text-cyan-100 disabled:opacity-60"
               >
-                {importingOrders ? "Importing…" : "Import Global Sales"}
+                {importingOrders ? "Importing…" : "Import GHL Sales"}
               </button>
               <button onClick={handleMarkPaid} className="rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm font-extrabold text-slate-950">
                 Mark Selected Paid Out
@@ -914,10 +919,12 @@ export default function CouponsPage() {
           </div>
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl lg:col-span-2">
+        <GhlCouponsPanel handlers={{ requireAuth, handleAuthError, toast }} ready={ready} refreshKey={panelRefresh} />
+
+        <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl lg:col-span-2 min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <div>
-              <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">GHL Coupons</h2>
+              <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">GHL Sync &amp; Raw Fetch</h2>
               <div className="mt-1 text-xs text-slate-400">
                 {ghlCoupons.length} codes fetched · {affiliateLinkedCount} matched to affiliates
               </div>
@@ -1022,6 +1029,9 @@ export default function CouponsPage() {
           </div>
         </section>
       </main>
+      {usageCode && (
+        <CouponUsageModal code={usageCode} onClose={() => setUsageCode(null)} handlers={{ requireAuth, handleAuthError, toast }} />
+      )}
       <Toast message={message} />
     </div>
   );

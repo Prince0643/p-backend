@@ -194,7 +194,12 @@ async function setAffiliateStatus(id, status) {
     return rows[0] ? rowToAffiliate(rows[0]) : null;
 }
 
+// Flat program-wide affiliate commission rate (fraction), applied at registration and as
+// the default when an admin assigns a GHL coupon to an affiliate.
+const AFFILIATE_FEE_PERCENT = 0.10;
+
 module.exports = {
+    AFFILIATE_FEE_PERCENT,
     PH_EWALLET_METHODS,
     PH_BANK_METHODS,
     GLOBAL_METHODS,

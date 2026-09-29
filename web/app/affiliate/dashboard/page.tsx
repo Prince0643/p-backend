@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { useAffiliateAuth } from "@/lib/useAffiliateAuth";
 import { useToast } from "@/lib/useToast";
+import { formatMoney } from "@/lib/money";
 import { Toast } from "@/components/Toast";
 import { BrandMark } from "@/components/BrandMark";
 
@@ -57,37 +58,9 @@ type Redemption = {
 
 type Stats = { totalRedemptions: number; paidRedemptions: number; totalEarnings: number };
 
-type CurrencyTotals = { sales: number; earned: number; paidOut: number; unpaid: number };
+type CurrencyTotals = { sales: number; commission?: number; earned?: number; paidOut?: number; unpaid?: number };
 
-function money(value: number, currency: string) {
-  try {
-    return new Intl.NumberFormat(currency === "USD" ? "en-US" : "en-PH", {
-      style: "currency",
-      currency: currency || "PHP",
-      maximumFractionDigits: 2,
-    }).format(Number(value) || 0);
-  } catch {
-    return `${currency || ""} ${Number(value) || 0}`.trim();
-  }
-}
-
-type CampaignStats = { paidCount: number; pendingCount: number; revenue: number; commissionTotal: number };
-
-type Campaign = {
-  id: string;
-  name: string;
-  slug: string;
-  siteName: string | null;
-  siteChannel: "local" | "global" | null;
-  destinationUrl: string;
-  link: string;
-  stats: CampaignStats;
-  // currency is the single currency involved, or null when the campaign spans more
-  // than one (e.g. legacy campaigns with both LOCAL/PHP and GLOBAL/USD sales) - in
-  // that case statsByCurrency is the source of truth for display.
-  currency: string | null;
-  statsByCurrency: Record<string, CampaignStats>;
-};
+const money = formatMoney;
 
 function statusPill(status: string) {
   if (status === "active" || status === "paid") return "border-emerald-400/40 text-emerald-200";
@@ -105,10 +78,6 @@ export default function AffiliateDashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [totalsByCurrency, setTotalsByCurrency] = useState<Record<string, CurrencyTotals> | null>(null);
   const [copied, setCopied] = useState(false);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [campaignsLoading, setCampaignsLoading] = useState(true);
-  const [campaignsError, setCampaignsError] = useState<string | null>(null);
-  const [copiedCampaignId, setCopiedCampaignId] = useState<string | null>(null);
 
   const [editingPayout, setEditingPayout] = useState(false);
   const [region, setRegion] = useState<"PH" | "GLOBAL">("PH");
@@ -134,38 +103,14 @@ export default function AffiliateDashboardPage() {
     setGlobalMethod(data.affiliate.paymentRegion === "GLOBAL" ? data.affiliate.preferredBank : "");
   }, []);
 
-  const loadCampaigns = useCallback(async (token: string) => {
-    const data = await apiFetch<{ campaigns: Campaign[] }>("/api/affiliates/me/campaigns", token);
-    setCampaigns(data.campaigns || []);
-  }, []);
-
   useEffect(() => {
     if (!ready) return;
     const token = requireAuth();
     if (!token) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- standard fetch-on-mount pattern
     load(token).catch((e) => { if (!handleAuthError(e)) toast(e.message); });
-    setCampaignsLoading(true);
-    setCampaignsError(null);
-    loadCampaigns(token)
-      .catch((e) => {
-        if (!handleAuthError(e)) {
-          setCampaignsError((e as Error).message || "Could not load your campaigns.");
-        }
-      })
-      .finally(() => setCampaignsLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- requireAuth/load intentionally not deps to avoid refetch loops
   }, [ready]);
-
-  async function copyCampaignLink(c: Campaign) {
-    try {
-      await navigator.clipboard.writeText(c.link);
-      setCopiedCampaignId(c.id);
-      setTimeout(() => setCopiedCampaignId(null), 2000);
-    } catch {
-      toast("Could not copy - select and copy the link manually.");
-    }
-  }
 
   async function copyCoupon() {
     if (!affiliate) return;
@@ -259,9 +204,9 @@ export default function AffiliateDashboardPage() {
             <div key={currency}>
               <h2 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">{currency} Totals</h2>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <StatCard label="Earned" value={money(totals.earned, currency)} accent />
-                <StatCard label="Paid Out" value={money(totals.paidOut, currency)} />
-                <StatCard label="Unpaid" value={money(totals.unpaid, currency)} />
+                <StatCard label="Earned" value={money(totals.earned ?? totals.commission ?? 0, currency)} accent />
+                <StatCard label="Paid Out" value={money(totals.paidOut ?? 0, currency)} />
+                <StatCard label="Unpaid" value={money(totals.unpaid ?? 0, currency)} />
                 <StatCard label="Sales" value={money(totals.sales, currency)} />
               </div>
             </div>
@@ -293,61 +238,8 @@ export default function AffiliateDashboardPage() {
         {coupon && (
           <p className="mt-3 text-xs text-slate-400">
             {(coupon.discountPercent * 100).toFixed(0)}% customer discount · {(coupon.affiliateFeePercent * 100).toFixed(0)}%
-            commission for you{coupon.maxRedemptions ? ` · one-time use` : ""}
+            commission for you{coupon.maxRedemptions ? ` · one-time use` : ""}. Share this code with buyers at checkout.
           </p>
-        )}
-      </section>
-
-      <section className="mb-6 rounded-2xl border border-white/10 bg-white/[.03] p-5 shadow-2xl">
-        <h2 className="mb-3 text-xs font-bold uppercase tracking-wide text-slate-400">Your Campaign Links</h2>
-        {campaignsLoading ? (
-          <p className="text-sm text-slate-400">Loading your campaigns…</p>
-        ) : campaignsError ? (
-          <p className="text-sm text-red-300">{campaignsError}</p>
-        ) : campaigns.length === 0 ? (
-          <p className="text-sm text-slate-400">No campaigns yet.</p>
-        ) : (
-          <div className="space-y-3">
-            {campaigns.map((c) => (
-              <div key={c.id} className="rounded-xl border border-white/10 bg-[#0a122480] p-3.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold">{c.name}</span>
-                      {c.siteChannel && (
-                        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${c.siteChannel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
-                          {c.siteChannel === "global" ? "Global" : "Local"}
-                        </span>
-                      )}
-                    </div>
-                    {c.siteName && <div className="mt-0.5 text-xs text-slate-500">{c.siteName}</div>}
-                    <div className="mt-0.5 text-xs text-slate-400">
-                      {c.stats?.paidCount ?? 0} paid sales
-                      {c.stats?.pendingCount ? ` · ${c.stats.pendingCount} pending` : ""}
-                      {c.currency && (c.stats?.commissionTotal ?? 0) > 0 && (
-                        <> · {money(c.stats.commissionTotal, c.currency)} earned</>
-                      )}
-                      {!c.currency &&
-                        c.statsByCurrency &&
-                        Object.entries(c.statsByCurrency)
-                          .filter(([, s]) => (s.commissionTotal ?? 0) > 0)
-                          .map(([currency, s]) => (
-                            <span key={currency}> · {money(s.commissionTotal, currency)} earned</span>
-                          ))}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => copyCampaignLink(c)}
-                    aria-label={`Copy your personal link for ${c.name}`}
-                    className="rounded-lg border border-white/10 bg-white/10 px-3 py-1.5 text-xs font-bold hover:bg-white/20"
-                  >
-                    {copiedCampaignId === c.id ? "Copied!" : "Copy Link"}
-                  </button>
-                </div>
-                <div className="mt-2 break-all font-mono text-xs text-cyan-200">{c.link}</div>
-              </div>
-            ))}
-          </div>
         )}
       </section>
 

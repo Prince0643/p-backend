@@ -365,6 +365,29 @@ Returns basic API information and available endpoints.
 
 ---
 
+## GHL Coupon Tracking & Affiliate Commissions (Admin)
+
+All routes are under `/api/admin` and require admin auth (`x-api-key` or admin token).
+
+- The scheduled importer (every 10 min in production) reads native GHL orders from the GLOBAL location (`GHL_GLOBAL_LOCATION_ID`, key from `GHL_LOCATIONS_JSON` or `GHL_GLOBAL_PRIVATE_KEY`) and the MAIN location (`GHL_LOCATION_ID` + `GHL_PRIVATE_KEY`). Every paid, live, non-invoice order with a coupon code is recorded (`source='ghl'`, idempotent per order id). Unknown codes are auto-created as `type='general'`, `origin='ghl'`, `local_enabled=false` and are never pushed back to GHL. Commission base = `subtotal - discount` (no tax/shipping); the affiliate fee is credited only when the coupon has an affiliate, otherwise `affiliate_email` is NULL and fee 0.
+- Local (PayMongo) commission = pre-tax, post-discount amount x affiliate fee %; `coupon_redemptions.commission_base` records the basis for both channels. Campaign attribution is no longer set on new sales.
+- Affiliate coupons (`origin='local'`) are pushed to GHL GLOBAL + MAIN on registration and on admin create/update; per-location state lives in `coupons.ghl_sync` and failed pushes are retried at the start of each import run.
+- `POST /api/admin/coupons/ghl/import-orders` `{ backfill? }` returns the aggregate summary plus `locations.global` / `locations.main`.
+
+| Route | Purpose |
+|-------|---------|
+| `GET /ghl-coupons` | `{ coupons: [{ code, origin, type, discountPercent, affiliate: {email,name}\|null, locations: [{ key: 'global'\|'main', locationId, ghlCouponId, status }], usage: { paidCount, unassignedCount } }], errors: [string] }`. `status` is GHL's coupon status, or `missing` / `pending` / `error` / `unknown` (list failed). |
+| `POST /ghl-coupons/:code/assign` | Body `{ affiliateEmail, affiliateFeePercent? }` (fraction, default 0.10). 404 unknown code, 400 unknown affiliate / bad fee / registration coupon. Returns `{ coupon, creditable: [redemption] }`. |
+| `POST /ghl-coupons/:code/credit-past` | Body `{ redemptionIds? }`. Credits unassigned paid GHL rows: fee = `commission_base` x coupon fee %. Returns `{ credited, totalsByCurrency: { USD: { commission } } }`. 409 if no affiliate. |
+| `POST /ghl-coupons/:code/unassign` | GHL-origin coupons only (400 otherwise): type back to `general`, affiliate cleared; past credited rows untouched. |
+| `GET /coupons/:code/usage` | `{ code, redemptions: [{ id, source, status, email, fullName, currency, baseAmount, discountAmount, commissionBase, affiliateFeeAmount, affiliateEmail, createdAt, ghlOrderId, ghlLocationKey }], totalsByCurrency: { [cur]: { orders, revenue, discount, commission } } }` (paid rows only in totals). |
+
+`GET /api/affiliates/me`, `GET /api/admin/affiliates` (per affiliate) and `GET /api/admin/affiliates/:id` now include `totalsByCurrency: { PHP: { sales, commission, earned, paidOut, unpaid }, USD: {...} }` alongside the existing fields (`commission` == `earned`).
+
+Scripts: `node scripts/backfillGhlCouponOrders.js [--apply]` (full-history backfill, dry-run by default) and `node scripts/pushAffiliateCouponsToGhl.js [--apply]` (pushes existing local affiliate coupons to GLOBAL + MAIN, skipping ones already present).
+
+---
+
 ## Webhook Endpoint (Internal)
 
 **POST** `/api/payments/webhook`

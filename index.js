@@ -12,6 +12,7 @@ const paymentRoutes = require('./routes/payments');
 const clockistryRoutes = require('./routes/clockistry');
 const adminProductRoutes = require('./routes/adminProducts');
 const adminCouponRoutes = require('./routes/adminCoupons');
+const adminGhlCouponRoutes = require('./routes/adminGhlCoupons');
 const adminCampaignRoutes = require('./routes/adminCampaigns');
 const adminCampaignSiteRoutes = require('./routes/adminCampaignSites');
 const affiliateRoutes = require('./routes/affiliates');
@@ -107,6 +108,7 @@ app.use('/api/clockistry', clockistryRoutes);
 app.use('/api/admin', adminAuthRoutes);
 app.use('/api/admin', adminProductRoutes);
 app.use('/api/admin', adminCouponRoutes);
+app.use('/api/admin', adminGhlCouponRoutes);
 app.use('/api/admin', adminCampaignRoutes);
 app.use('/api/admin', adminCampaignSiteRoutes);
 app.use('/api/affiliates', affiliateRoutes);
@@ -217,7 +219,7 @@ if (require.main === module) {
     });
 }
 
-// GLOBAL GHL order import scheduler - only in production, never in tests or a bare
+// GHL order import scheduler (GLOBAL + MAIN locations) - only in production, never in tests or a bare
 // `require('./index')` (e.g. the test suite imports `app` directly, which must never
 // have side effects like a recurring timer touching a real/test database on its own).
 if (process.env.NODE_ENV === 'production') {
@@ -225,7 +227,7 @@ if (process.env.NODE_ENV === 'production') {
     const IMPORT_INTERVAL_MS = 10 * 60 * 1000;
     const runImport = () => {
         importGlobalOrders({ backfill: false }).catch((err) => {
-            console.error('GHL global order import failed:', err.message);
+            console.error('GHL order import failed:', err.message);
         });
     };
     setTimeout(runImport, 30 * 1000);

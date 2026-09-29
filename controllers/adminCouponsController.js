@@ -4,11 +4,14 @@ const {
     upsertCoupon,
     deleteCoupon,
     listRedemptions,
-    markRedemptionsPaid
+    markRedemptionsPaid,
+    totalsByCurrencyForCoupon
 } = require('../utils/couponStore');
 const affiliateStore = require('../utils/affiliateStore');
 const ghlService = require('../services/ghlService');
 const { importGlobalOrders } = require('../services/ghlOrderImport');
+const { pushCouponSafe } = require('../services/ghlCouponPush');
+const { toUsageRedemption, locationKeyMap } = require('./adminGhlCouponsController');
 
 exports.list = async (req, res) => {
     try {
@@ -107,8 +110,16 @@ exports.upsert = async (req, res) => {
         const saved = await upsertCoupon({
             ...req.body,
             code,
-            type: existing ? existing.type : (req.body?.type || 'general')
+            type: existing ? existing.type : (req.body?.type || 'general'),
+            origin: undefined, // origin is set by the system, never by the request body
+            // The affiliate link of a GHL-origin coupon is managed only via assign/unassign.
+            ...(existing?.origin === 'ghl'
+                ? { affiliateEmail: existing.affiliateEmail, affiliateFeePercent: existing.affiliateFeePercent }
+                : {})
         });
+        // Local affiliate coupons are mirrored to GHL GLOBAL + MAIN (non-fatal; failures
+        // are recorded per location and retried by the scheduled import).
+        if (saved.type === 'affiliate' && saved.origin === 'local') await pushCouponSafe(saved.code);
         res.json({ success: true, coupon: saved });
     } catch (err) {
         res.status(400).json({ error: err.message || 'Failed to save coupon' });
@@ -162,5 +173,23 @@ exports.importGhlOrders = async (req, res) => {
         res.json({ success: true, ...summary });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to import GHL orders' });
+    }
+};
+
+// GET /api/admin/coupons/:code/usage - every redemption of a coupon (all statuses) plus
+// per-currency totals over PAID ones.
+exports.usage = async (req, res) => {
+    try {
+        const coupon = await findCoupon(req.params.code);
+        if (!coupon) return res.status(404).json({ error: 'Coupon not found' });
+        const redemptions = await listRedemptions({ code: coupon.code });
+        const keyById = locationKeyMap();
+        res.json({
+            code: coupon.code,
+            redemptions: redemptions.map((r) => toUsageRedemption(r, keyById)),
+            totalsByCurrency: totalsByCurrencyForCoupon(redemptions)
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to load coupon usage' });
     }
 };

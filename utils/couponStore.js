@@ -18,6 +18,7 @@ function normalizeEmail(input) {
 }
 
 const COUPON_TYPES = ['affiliate', 'general'];
+const COUPON_ORIGINS = ['local', 'ghl'];
 
 /** Returns undefined (caller should treat as "not specified") for empty/nullish input, else validates the enum. */
 function normalizeCouponType(value) {
@@ -89,10 +90,16 @@ function normalizeCouponInput(payload) {
     const ghlLocationIds = normalizeGhlLocationIds(payload.ghlLocationIds);
     const localEnabled = payload.localEnabled === undefined ? undefined : Boolean(payload.localEnabled);
     const ghlCouponMeta = payload.ghlCouponMeta !== undefined ? payload.ghlCouponMeta : undefined;
+    // Only honoured when a coupon row is first created; never changed by a later upsert.
+    let origin;
+    if (payload.origin !== undefined && payload.origin !== null && payload.origin !== '') {
+        origin = String(payload.origin).trim().toLowerCase();
+        if (!COUPON_ORIGINS.includes(origin)) throw new Error(`origin must be one of ${COUPON_ORIGINS.join(', ')}`);
+    }
 
     return {
         code, discountPercent, affiliateFeePercent, affiliateEmail, active, expiresAt, productIds, maxRedemptions, notes,
-        type, ghlLocationIds, localEnabled, ghlCouponMeta
+        type, ghlLocationIds, localEnabled, ghlCouponMeta, origin
     };
 }
 
@@ -110,7 +117,9 @@ function rowToCoupon(row, productIds = []) {
         notes: row.notes || '',
         ghlLocationIds: row.ghl_location_ids || null,
         localEnabled: row.local_enabled !== false,
-        ghlCouponMeta: row.ghl_coupon_meta || null
+        ghlCouponMeta: row.ghl_coupon_meta || null,
+        origin: row.origin || 'local',
+        ghlSync: row.ghl_sync || null
     };
     if (row.affiliate_id !== undefined) {
         coupon.affiliate = row.affiliate_id
@@ -179,8 +188,8 @@ async function upsertCoupon(payload) {
         const localEnabled = c.localEnabled === undefined ? true : c.localEnabled;
 
         await client.query(
-            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, type, ghl_location_ids, local_enabled, ghl_coupon_meta, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, type, ghl_location_ids, local_enabled, ghl_coupon_meta, origin, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
              ON CONFLICT (code) DO UPDATE SET
                 discount_percent = EXCLUDED.discount_percent,
                 affiliate_fee_percent = EXCLUDED.affiliate_fee_percent,
@@ -196,7 +205,8 @@ async function upsertCoupon(payload) {
                 updated_at = now()`,
             [
                 c.code, c.discountPercent, c.affiliateFeePercent, c.affiliateEmail, c.active, c.expiresAt, c.maxRedemptions, c.notes,
-                type, c.ghlLocationIds ?? null, localEnabled, c.ghlCouponMeta ? JSON.stringify(c.ghlCouponMeta) : null
+                type, c.ghlLocationIds ?? null, localEnabled, c.ghlCouponMeta ? JSON.stringify(c.ghlCouponMeta) : null,
+                c.origin || 'local'
             ]
         );
         await client.query('DELETE FROM coupon_products WHERE coupon_code = $1', [c.code]);
@@ -263,7 +273,8 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
 
     // General (non-affiliate) coupons imported from GHL, or otherwise scoped away from
     // the Local funnel, are treated as an invalid code here.
-    if (couponRow.type !== 'affiliate' && couponRow.local_enabled === false) {
+    // GHL-origin coupons stay non-local even after being assigned to an affiliate.
+    if (couponRow.local_enabled === false && (couponRow.type !== 'affiliate' || couponRow.origin === 'ghl')) {
         return { error: 'This coupon is not valid for this checkout.', reason: 'not_local_enabled' };
     }
 
@@ -427,15 +438,16 @@ async function finalizeCouponReservation(client, entry) {
     try {
         const id = `RDM${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
         const { rows } = await client.query(
-            `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, campaign_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12)
+            `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, campaign_id, commission_base)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13)
              ON CONFLICT (payment_reference) DO NOTHING
              RETURNING *`,
             [
                 id, toCouponCode(entry.code), String(entry.paymentReference || ''), entry.productId || null,
                 entry.email || null, entry.fullName || null, Number(entry.baseAmount) || 0,
                 Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
-                entry.affiliateEmail || null, entry.currency || 'PHP', entry.campaignId || null
+                entry.affiliateEmail || null, entry.currency || 'PHP', entry.campaignId || null,
+                entry.commissionBase != null ? Number(entry.commissionBase) : null
             ]
         );
         if (!rows[0]) {
@@ -520,7 +532,9 @@ function rowToRedemption(row) {
         ghlProductIds: row.ghl_product_ids || [],
         affiliatePaidAt: row.affiliate_paid_at ? new Date(row.affiliate_paid_at).toISOString() : null,
         refundedAt: row.refunded_at ? new Date(row.refunded_at).toISOString() : null,
-        needsReview: Boolean(row.needs_review)
+        needsReview: Boolean(row.needs_review),
+        commissionBase: row.commission_base != null ? Number(row.commission_base) : null,
+        ghlOrderId: row.ghl_order_id || null
     };
 }
 
@@ -533,15 +547,16 @@ function rowToRedemption(row) {
 async function insertRedemptionPaid(entry, campaignId) {
     const id = `RDM${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
     const { rows } = await pool.query(
-        `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, paid_at, campaign_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'paid',now(),$12)
+        `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, paid_at, campaign_id, commission_base)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'paid',now(),$12,$13)
          ON CONFLICT (payment_reference) DO NOTHING
          RETURNING *`,
         [
             id, toCouponCode(entry.code), String(entry.paymentReference || ''), entry.productId || null,
             entry.email || null, entry.fullName || null, Number(entry.baseAmount) || 0,
             Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
-            entry.affiliateEmail || null, entry.currency || 'PHP', campaignId || null
+            entry.affiliateEmail || null, entry.currency || 'PHP', campaignId || null,
+            entry.commissionBase != null ? Number(entry.commissionBase) : null
         ]
     );
     return rows[0] ? rowToRedemption(rows[0]) : null;
@@ -623,8 +638,8 @@ async function insertGhlRedemption(entry) {
         `INSERT INTO coupon_redemptions
             (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount,
              affiliate_fee_amount, affiliate_email, currency, status, created_at, paid_at, campaign_id,
-             source, ghl_location_id, ghl_product_ids)
-         VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,'paid',$11,$11,$12,'ghl',$13,$14)
+             source, ghl_location_id, ghl_product_ids, commission_base, ghl_order_id)
+         VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,'paid',$11,$11,NULL,'ghl',$12,$13,$14,$15)
          ON CONFLICT (payment_reference) DO NOTHING
          RETURNING *`,
         [
@@ -632,7 +647,8 @@ async function insertGhlRedemption(entry) {
             entry.email || null, entry.fullName || null,
             Number(entry.baseAmount) || 0, Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
             entry.affiliateEmail || null, entry.currency || 'USD', entry.createdAt || new Date().toISOString(),
-            entry.campaignId || null, entry.ghlLocationId || null, entry.ghlProductIds || []
+            entry.ghlLocationId || null, entry.ghlProductIds || [],
+            entry.commissionBase != null ? Number(entry.commissionBase) : null, String(entry.orderId)
         ]
     );
     return rows[0] ? rowToRedemption(rows[0]) : null;
@@ -675,6 +691,169 @@ async function flagPartialRefund(orderId) {
     return { action: rowCount > 0 ? 'flagged' : 'not_found' };
 }
 
+/**
+ * Auto-creates a coupon discovered on a native GHL order: general, GHL-origin, not usable
+ * at local checkout. Idempotent (ON CONFLICT DO NOTHING - a concurrent/rerun never clobbers
+ * an existing coupon). Returns true if a row was created.
+ */
+async function createGhlDiscoveredCoupon({ code, discountPercent = 0, locationId }) {
+    const normalizedCode = toCouponCode(code);
+    const percent = Math.min(1, Math.max(0, Number(discountPercent) || 0));
+    const { rowCount } = await pool.query(
+        `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, active, notes, type, ghl_location_ids, local_enabled, origin)
+         VALUES ($1,$2,0,true,'Discovered from GHL order','general',$3,false,'ghl')
+         ON CONFLICT (code) DO NOTHING`,
+        [normalizedCode, percent, locationId ? [locationId] : null]
+    );
+    return rowCount > 0;
+}
+
+/** Records that a GHL-origin coupon was also seen at another GHL location. */
+async function addGhlLocationToCoupon(code, locationId) {
+    if (!locationId) return;
+    await pool.query(
+        `UPDATE coupons SET ghl_location_ids = array_append(COALESCE(ghl_location_ids, '{}'), $2::text)
+         WHERE code = $1 AND origin = 'ghl' AND NOT ($2::text = ANY(COALESCE(ghl_location_ids, '{}')))`,
+        [toCouponCode(code), locationId]
+    );
+}
+
+/** Merges one location's push state into coupons.ghl_sync ({ [locationKey]: state }). */
+async function setGhlSyncState(code, locationKey, state) {
+    await pool.query(
+        `UPDATE coupons SET ghl_sync = COALESCE(ghl_sync, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+         WHERE code = $1`,
+        [toCouponCode(code), locationKey, JSON.stringify({ ...state, at: new Date().toISOString() })]
+    );
+}
+
+/**
+ * Local affiliate coupons with a push attempt that has not succeeded yet (pending or
+ * error). Attempts newer than a minute are left alone so a retry never races the request
+ * that is still pushing the same coupon.
+ */
+async function listCouponsWithPendingGhlPush() {
+    const { rows } = await pool.query(
+        `SELECT code FROM coupons
+         WHERE origin = 'local' AND type = 'affiliate' AND active = true AND ghl_sync IS NOT NULL
+           AND EXISTS (SELECT 1 FROM jsonb_each(ghl_sync) e
+                 WHERE e.value->>'status' <> 'synced' AND (e.value->>'at')::timestamptz < now() - interval '1 minute')
+         ORDER BY code`
+    );
+    return Promise.all(rows.map((r) => findCoupon(r.code)));
+}
+
+/** Sets a coupon's type/affiliate link directly (bypasses upsertCoupon's sticky-type rule). */
+async function setCouponAffiliation(code, { type, affiliateEmail, affiliateFeePercent }) {
+    const { rowCount } = await pool.query(
+        `UPDATE coupons SET type = $2, affiliate_email = $3,
+                affiliate_fee_percent = COALESCE($4::numeric, affiliate_fee_percent), updated_at = now()
+         WHERE code = $1`,
+        [toCouponCode(code), type, affiliateEmail || null, affiliateFeePercent == null ? null : affiliateFeePercent]
+    );
+    return rowCount > 0;
+}
+
+/** Paid GHL redemptions of a coupon that no affiliate has been credited for yet. */
+async function listCreditableRedemptions(code) {
+    const { rows } = await pool.query(
+        `SELECT * FROM coupon_redemptions
+         WHERE code = $1 AND source = 'ghl' AND status = 'paid' AND affiliate_email IS NULL
+         ORDER BY created_at DESC`,
+        [toCouponCode(code)]
+    );
+    return rows.map(rowToRedemption);
+}
+
+/**
+ * Credits still-unassigned paid GHL redemptions of `code` to an affiliate:
+ * fee = commission_base x feePercent (falls back to base - discount when commission_base
+ * is null). Already-credited rows are never touched. Returns the updated redemptions.
+ */
+async function creditRedemptions(code, { affiliateEmail, feePercent, redemptionIds = null }) {
+    const { rows } = await pool.query(
+        `UPDATE coupon_redemptions
+         SET affiliate_email = $2,
+             affiliate_fee_amount = ROUND(COALESCE(commission_base, GREATEST(base_amount - discount_amount, 0)) * $3::numeric, 2)
+         WHERE code = $1 AND source = 'ghl' AND status = 'paid' AND affiliate_email IS NULL
+           AND ($4::text[] IS NULL OR id = ANY($4::text[]))
+         RETURNING *`,
+        [toCouponCode(code), affiliateEmail, feePercent, redemptionIds]
+    );
+    return rows.map(rowToRedemption);
+}
+
+/**
+ * Net revenue before tax, consistent across channels: the stored commission_base, else a
+ * legacy fallback - base_amount for PayMongo rows (already post-discount) and
+ * base_amount - discount_amount for GHL rows (base_amount is the pre-discount subtotal).
+ */
+function netRevenue(r) {
+    if (r.commissionBase != null) return r.commissionBase;
+    return r.source === 'ghl' ? Math.max(r.baseAmount - r.discountAmount, 0) : r.baseAmount;
+}
+
+/** Sums paid redemptions per currency: { [currency]: { orders, revenue, discount, commission } }. */
+function totalsByCurrencyForCoupon(redemptions) {
+    const totals = {};
+    for (const r of redemptions) {
+        if (r.status !== 'paid') continue;
+        const t = totals[r.currency] || (totals[r.currency] = { orders: 0, revenue: 0, discount: 0, commission: 0 });
+        t.orders += 1;
+        t.revenue += netRevenue(r);
+        t.discount += r.discountAmount;
+        t.commission += r.affiliateFeeAmount;
+    }
+    for (const t of Object.values(totals)) {
+        for (const k of ['revenue', 'discount', 'commission']) t[k] = Number(t[k].toFixed(2));
+    }
+    return totals;
+}
+
+/**
+ * Redemptions credited to an affiliate: rows on their own coupon OR any row whose
+ * affiliate_email is theirs (e.g. a GHL coupon later assigned to them).
+ */
+async function listRedemptionsForAffiliate({ email, couponCode }) {
+    const { rows } = await pool.query(
+        `SELECT * FROM coupon_redemptions
+         WHERE lower(affiliate_email) = $1 OR ($2::text IS NOT NULL AND code = $2)
+         ORDER BY created_at DESC`,
+        [normalizeEmail(email), couponCode ? toCouponCode(couponCode) : null]
+    );
+    return rows.map(rowToRedemption);
+}
+
+/** Every paid redemption that is credited to some affiliate (by email or by an affiliate's own coupon). */
+async function listPaidAffiliateRedemptions() {
+    const { rows } = await pool.query(
+        `SELECT * FROM coupon_redemptions
+         WHERE status = 'paid'
+           AND (affiliate_email IS NOT NULL OR code IN (SELECT coupon_code FROM affiliates WHERE coupon_code IS NOT NULL))`
+    );
+    return rows.map(rowToRedemption);
+}
+
+/** Per-currency affiliate totals from paid redemptions: { [currency]: { sales, commission, earned, paidOut, unpaid } }. */
+function affiliateTotalsByCurrency(redemptions) {
+    const totals = {};
+    for (const r of redemptions) {
+        if (r.status !== 'paid') continue;
+        const t = totals[r.currency || 'PHP'] || (totals[r.currency || 'PHP'] = { sales: 0, commission: 0, earned: 0, paidOut: 0, unpaid: 0 });
+        t.sales += netRevenue(r);
+        t.commission += r.affiliateFeeAmount;
+        if (r.affiliatePaidAt) t.paidOut += r.affiliateFeeAmount;
+    }
+    for (const t of Object.values(totals)) {
+        t.sales = Number(t.sales.toFixed(2));
+        t.commission = Number(t.commission.toFixed(2));
+        t.earned = t.commission;
+        t.paidOut = Number(t.paidOut.toFixed(2));
+        t.unpaid = Number((t.commission - t.paidOut).toFixed(2));
+    }
+    return totals;
+}
+
 module.exports = {
     toCouponCode,
     normalizeEmail,
@@ -695,5 +874,16 @@ module.exports = {
     markRedemptionsPaid,
     insertGhlRedemption,
     applyGhlRefund,
-    flagPartialRefund
+    flagPartialRefund,
+    createGhlDiscoveredCoupon,
+    addGhlLocationToCoupon,
+    setGhlSyncState,
+    listCouponsWithPendingGhlPush,
+    setCouponAffiliation,
+    listCreditableRedemptions,
+    creditRedemptions,
+    totalsByCurrencyForCoupon,
+    listRedemptionsForAffiliate,
+    listPaidAffiliateRedemptions,
+    affiliateTotalsByCurrency
 };

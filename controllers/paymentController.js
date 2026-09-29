@@ -9,7 +9,6 @@ const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 const { findProduct } = require('../utils/productCatalog');
 const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleStore');
 const couponStore = require('../utils/couponStore');
-const campaignStore = require('../utils/campaignStore');
 const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 
 async function resolveCatalogProduct({ productId, productName }) {
@@ -52,7 +51,6 @@ exports.createPaymentIntent = async (req, res) => {
             discountAmount, // ✅ ADD: Receive discount amount
             promoCode,     // ✅ ADD: Receive promo code used
             referredBy,
-            campaign,        // campaign slug from a nx-ref.js-tracked checkout link
             attributionRef,  // coupon code carried by the ref cookie/localStorage (nx-ref.js)
             metadata = {}
         } = req.body;
@@ -150,32 +148,11 @@ exports.createPaymentIntent = async (req, res) => {
             discountPercent: appliedCoupon ? appliedCoupon.discountPercent : 0
         });
 
-        // Attribute this checkout to a campaign link only once we know an AFFILIATE
-        // coupon actually got applied (general coupons used via an affiliate link earn no
-        // affiliate credit, so they must never attribute a campaign either) - the
-        // campaign must also exist and be active. A slug alone is never enough. Campaigns
-        // no longer carry their own coupon code: one campaign applies to every affiliate.
-        let campaignId = null;
-        const normalizedCampaignSlug = campaign ? String(campaign).trim() : '';
-        if (normalizedCampaignSlug) {
-            if (!appliedCoupon) {
-                console.log('Campaign attribution skipped: no coupon was applied for slug', normalizedCampaignSlug);
-            } else if (appliedCoupon.type !== 'affiliate') {
-                console.log('Campaign attribution skipped: applied coupon is not an affiliate coupon:', normalizedCampaignSlug);
-            } else {
-                const matchedCampaign = await campaignStore.findCampaignBySlug(normalizedCampaignSlug);
-                if (!matchedCampaign) {
-                    console.log('Campaign attribution skipped: slug not found:', normalizedCampaignSlug);
-                } else if (!matchedCampaign.active) {
-                    console.log('Campaign attribution skipped: campaign inactive:', normalizedCampaignSlug);
-                } else {
-                    campaignId = matchedCampaign.id;
-                }
-            }
-        }
-
         if (appliedCoupon && couponReservationClient) {
-            const affiliateFeeAmount = Number((baseAmount * appliedCoupon.affiliateFeePercent).toFixed(2));
+            // computePricing's baseAmount is already the post-discount, pre-tax amount
+            // (catalog - discount), which is the commission basis.
+            const commissionBase = baseAmount;
+            const affiliateFeeAmount = Number((commissionBase * appliedCoupon.affiliateFeePercent).toFixed(2));
             await couponStore.finalizeCouponReservation(couponReservationClient, {
                 code: appliedCoupon.code,
                 paymentReference,
@@ -184,10 +161,10 @@ exports.createPaymentIntent = async (req, res) => {
                 fullName,
                 baseAmount,
                 discountAmount: serverDiscountAmount,
+                commissionBase,
                 affiliateFeeAmount,
                 affiliateEmail: appliedCoupon.affiliateEmail || referredBy || '',
-                currency: productInfo.currency,
-                campaignId
+                currency: productInfo.currency
             });
             // finalizeCouponReservation already committed + released the client above.
             // Track the reference so the catch block can release the hold if anything
@@ -240,10 +217,6 @@ exports.createPaymentIntent = async (req, res) => {
             // price even when the first payment was discounted (see the GHL invoice
             // schedule creation in handlePaymentSuccess below).
             fullPriceAmount: String(fullPriceAmount),
-
-            // Campaign attribution (checkout auto-attribution via nx-ref.js)
-            campaignId: String(campaignId || ''),
-            campaignSlug: String(normalizedCampaignSlug || ''),
 
             // ADD: Referral information
             referredBy: String(referredBy || ''),
@@ -724,10 +697,10 @@ async function handlePaymentSuccess(attributes) {
                             fullName: metadata.fullName,
                             baseAmount: redemptionBaseAmount,
                             discountAmount: Number(metadata.discountAmount) || 0,
+                            commissionBase: redemptionBaseAmount,
                             affiliateFeeAmount,
                             affiliateEmail: coupon.affiliateEmail || metadata.referredBy || '',
-                            currency: paymentData.attributes?.currency || 'PHP',
-                            campaignId: metadata.campaignId || null
+                            currency: paymentData.attributes?.currency || 'PHP'
                         });
                         console.log('Coupon redemption recorded directly (no prior reservation found):', coupon.code, 'affiliateFee:', affiliateFeeAmount);
                     } else {

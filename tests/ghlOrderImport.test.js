@@ -11,17 +11,28 @@ const GLOBAL_LOCATION_ID = 'loc_global_test';
 const GLOBAL_PRIVATE_KEY = 'pit_global_test';
 
 let originalResolveGlobalLocation;
+let originalResolveMainLocation;
 let originalCreateClient;
 let originalGlobalLocationIdEnv;
 
-function mockOrdersApi({ orders = [], detailByIdFn } = {}) {
+const MAIN_LOCATION_ID = 'loc_main_test';
+const MAIN_PRIVATE_KEY = 'pit_main_test';
+
+/**
+ * Mocks GLOBAL (always) and, when `mainOrders` is given, MAIN. `failListingFor` makes the
+ * order listing of that location id throw.
+ */
+function mockOrdersApi({ orders = [], mainOrders = null, detailByIdFn, failListingFor = null } = {}) {
     ghlService.resolveGlobalLocation = () => ({ name: 'Nexistry Core Global', locationId: GLOBAL_LOCATION_ID, privateKey: GLOBAL_PRIVATE_KEY });
-    ghlService.createClient = () => ({
+    ghlService.resolveMainLocation = () => (mainOrders ? { name: 'Main', locationId: MAIN_LOCATION_ID, privateKey: MAIN_PRIVATE_KEY } : null);
+    ghlService.createClient = ({ locationId }) => ({
         get: async (url, { params } = {}) => {
             if (url === '/payments/orders') {
+                if (failListingFor === locationId) throw new Error('token rejected');
+                const source = locationId === MAIN_LOCATION_ID ? mainOrders : orders;
                 const offset = params?.offset || 0;
                 const limit = params?.limit || 100;
-                return { data: { data: orders.slice(offset, offset + limit) } };
+                return { data: { data: source.slice(offset, offset + limit) } };
             }
             const match = url.match(/^\/payments\/orders\/(.+)$/);
             if (match) {
@@ -59,12 +70,14 @@ function baseOrder(overrides = {}) {
 
 beforeEach(() => {
     originalResolveGlobalLocation = ghlService.resolveGlobalLocation;
+    originalResolveMainLocation = ghlService.resolveMainLocation;
     originalCreateClient = ghlService.createClient;
     originalGlobalLocationIdEnv = process.env.GHL_GLOBAL_LOCATION_ID;
 });
 
 afterEach(() => {
     ghlService.resolveGlobalLocation = originalResolveGlobalLocation;
+    ghlService.resolveMainLocation = originalResolveMainLocation;
     ghlService.createClient = originalCreateClient;
     if (originalGlobalLocationIdEnv === undefined) delete process.env.GHL_GLOBAL_LOCATION_ID;
     else process.env.GHL_GLOBAL_LOCATION_ID = originalGlobalLocationIdEnv;
@@ -74,8 +87,9 @@ after(async () => {
     await pool.end();
 });
 
-test('returns an empty summary with an error when the Global location is not configured', async () => {
+test('returns an empty summary with an error when no GHL location is configured', async () => {
     ghlService.resolveGlobalLocation = () => null;
+    ghlService.resolveMainLocation = () => null;
     const summary = await importGlobalOrders({});
     assert.equal(summary.scanned, 0);
     assert.equal(summary.imported, 0);
@@ -96,15 +110,18 @@ test('imports a paid order with a matching affiliate coupon, USD currency and co
         const summary = await importGlobalOrders({});
         assert.equal(summary.scanned, 1);
         assert.equal(summary.imported, 1);
-        assert.deepEqual(summary.skipped, { noCoupon: 0, invoice: 0, unknownCode: 0, noAffiliate: 0, test: 0 });
+        assert.deepEqual(summary.skipped, { noCoupon: 0, invoice: 0, test: 0 });
 
         const { rows } = await pool.query('SELECT * FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
         assert.equal(rows.length, 1);
         assert.equal(rows[0].source, 'ghl');
         assert.equal(rows[0].currency, 'USD');
-        assert.equal(Number(rows[0].base_amount), 85);
+        assert.equal(Number(rows[0].base_amount), 100); // pre-discount subtotal
         assert.equal(Number(rows[0].discount_amount), 15);
+        assert.equal(Number(rows[0].commission_base), 85); // subtotal - discount
         assert.equal(Number(rows[0].affiliate_fee_amount), 8.5); // 85 * 0.10
+        assert.equal(rows[0].ghl_order_id, order._id);
+        assert.equal(rows[0].ghl_location_id, GLOBAL_LOCATION_ID);
         assert.equal(rows[0].affiliate_email, email);
         assert.equal(rows[0].status, 'paid');
 
@@ -133,24 +150,171 @@ test('skips invoice-sourced orders (would double-count PayMongo mirror invoices)
     }
 });
 
-test('skips orders with an unknown coupon code', async () => {
-    const order = baseOrder({ couponCode: 'TOTALLY_UNKNOWN_CODE_XYZ' });
-    mockOrdersApi({ orders: [order] });
-
-    const summary = await importGlobalOrders({});
-    assert.equal(summary.skipped.unknownCode, 1);
-    assert.equal(summary.imported, 0);
-});
-
-test('skips orders whose coupon has no linked affiliate', async () => {
-    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: null });
+test('an unknown coupon code is auto-created as a general, GHL-origin, non-local coupon and the buyer is still recorded with 0 fee', async () => {
+    const code = `GHLNEW${Date.now().toString(36).toUpperCase()}`;
     const order = baseOrder({ couponCode: code });
-    mockOrdersApi({ orders: [order] });
+    mockOrdersApi({
+        orders: [order],
+        detailByIdFn: () => ({
+            amountSummary: { subtotal: 100, discount: 20 },
+            coupon: { _id: 'c1', code, discountType: 'percentage', discountValue: 20 },
+            contactSnapshot: { email: 'buyer@example.com', name: 'Buyer One' },
+            items: []
+        })
+    });
 
     try {
         const summary = await importGlobalOrders({});
-        assert.equal(summary.skipped.noAffiliate, 1);
-        assert.equal(summary.imported, 0);
+        assert.equal(summary.imported, 1);
+        assert.equal(summary.couponsCreated, 1);
+        assert.equal(summary.unassigned, 1);
+
+        const { rows: couponRows } = await pool.query('SELECT * FROM coupons WHERE code = $1', [code]);
+        assert.equal(couponRows[0].origin, 'ghl');
+        assert.equal(couponRows[0].type, 'general');
+        assert.equal(couponRows[0].local_enabled, false);
+        assert.equal(Number(couponRows[0].discount_percent), 0.2);
+        assert.equal(couponRows[0].notes, 'Discovered from GHL order');
+        assert.deepEqual(couponRows[0].ghl_location_ids, [GLOBAL_LOCATION_ID]);
+
+        const { rows } = await pool.query('SELECT * FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(rows[0].affiliate_email, null);
+        assert.equal(Number(rows[0].affiliate_fee_amount), 0);
+        assert.equal(rows[0].email, 'buyer@example.com');
+        assert.equal(rows[0].full_name, 'Buyer One');
+        assert.equal(Number(rows[0].commission_base), 80);
+
+        // Can't be used at Local checkout.
+        const validation = await couponStore.validateCouponReadOnly({ code, productId: 'test_product', email: 'x@example.com' });
+        assert.equal(validation.reason, 'not_local_enabled');
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('a non-percentage GHL coupon is created with discount_percent 0', async () => {
+    const code = `GHLFLAT${Date.now().toString(36).toUpperCase()}`;
+    const order = baseOrder({ couponCode: code });
+    mockOrdersApi({
+        orders: [order],
+        detailByIdFn: () => ({ amountSummary: { subtotal: 100, discount: 10 }, coupon: { code, discountType: 'amount', discountValue: 10 } })
+    });
+    try {
+        await importGlobalOrders({});
+        const { rows } = await pool.query('SELECT discount_percent FROM coupons WHERE code = $1', [code]);
+        assert.equal(Number(rows[0].discount_percent), 0);
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('imports from BOTH locations, with per-location summaries, and one location failing does not stop the other', async () => {
+    const code = await createTestCoupon({ type: 'general' });
+    const globalOrder = baseOrder({ couponCode: code });
+    const mainOrder = baseOrder({ couponCode: code, altId: MAIN_LOCATION_ID });
+    try {
+        mockOrdersApi({ orders: [globalOrder], mainOrders: [mainOrder], detailByIdFn: () => ({ amountSummary: { subtotal: 100, discount: 15 } }) });
+        const summary = await importGlobalOrders({});
+        assert.equal(summary.imported, 2);
+        assert.equal(summary.locations.global.imported, 1);
+        assert.equal(summary.locations.main.imported, 1);
+        assert.equal(summary.locations.main.locationId, MAIN_LOCATION_ID);
+
+        const { rows } = await pool.query('SELECT ghl_location_id FROM coupon_redemptions WHERE code = $1 ORDER BY ghl_location_id', [code]);
+        assert.deepEqual(rows.map((r) => r.ghl_location_id), [GLOBAL_LOCATION_ID, MAIN_LOCATION_ID].sort());
+
+        // Global listing fails; main still imports a new order.
+        const mainOrder2 = baseOrder({ couponCode: code, altId: MAIN_LOCATION_ID });
+        mockOrdersApi({ orders: [globalOrder], mainOrders: [mainOrder2], failListingFor: GLOBAL_LOCATION_ID, detailByIdFn: () => ({ amountSummary: { subtotal: 100, discount: 15 } }) });
+        const partial = await importGlobalOrders({});
+        assert.equal(partial.locations.main.imported, 1);
+        assert.equal(partial.locations.global.imported, 0);
+        assert.ok(partial.errors.some((e) => e.startsWith('[global]') && /token rejected/.test(e)));
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('the same unknown code seen at a second location extends the GHL-origin coupon location list', async () => {
+    const code = `GHLBOTH${Date.now().toString(36).toUpperCase()}`;
+    mockOrdersApi({
+        orders: [baseOrder({ couponCode: code })],
+        mainOrders: [baseOrder({ couponCode: code, altId: MAIN_LOCATION_ID })],
+        detailByIdFn: () => ({ amountSummary: { subtotal: 100, discount: 15 } })
+    });
+    try {
+        const summary = await importGlobalOrders({});
+        assert.equal(summary.couponsCreated, 1);
+        const { rows } = await pool.query('SELECT ghl_location_ids FROM coupons WHERE code = $1', [code]);
+        assert.deepEqual([...rows[0].ghl_location_ids].sort(), [GLOBAL_LOCATION_ID, MAIN_LOCATION_ID].sort());
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('a coupon with no linked affiliate is recorded with affiliate_email NULL and 0 fee', async () => {
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: null });
+    const order = baseOrder({ couponCode: code });
+    mockOrdersApi({ orders: [order], detailByIdFn: () => ({ amountSummary: { subtotal: 100, discount: 15 } }) });
+
+    try {
+        const summary = await importGlobalOrders({});
+        assert.equal(summary.imported, 1);
+        assert.equal(summary.unassigned, 1);
+        const { rows } = await pool.query('SELECT affiliate_email, affiliate_fee_amount FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(rows[0].affiliate_email, null);
+        assert.equal(Number(rows[0].affiliate_fee_amount), 0);
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('the affiliate fee is computed on subtotal - discount, excluding tax and shipping', async () => {
+    const email = `ghl.fee.${Date.now()}@example.com`;
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: email, affiliateFeePercent: 0.10 });
+    const order = baseOrder({ couponCode: code, amount: 165, subtotal: 200, discount: 50 }); // amount includes 15 tax
+    mockOrdersApi({
+        orders: [order],
+        detailByIdFn: () => ({ amountSummary: { subtotal: 200, discount: 50, tax: 15, shipping: 0 } })
+    });
+    try {
+        await importGlobalOrders({});
+        const { rows } = await pool.query('SELECT * FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(Number(rows[0].commission_base), 150);
+        assert.equal(Number(rows[0].affiliate_fee_amount), 15);
+        assert.equal(Number(rows[0].base_amount), 200);
+        assert.equal(rows[0].affiliate_email, email);
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('dry run reads GHL but writes nothing (no redemptions, no coupons)', async () => {
+    const code = `GHLDRY${Date.now().toString(36).toUpperCase()}`;
+    const order = baseOrder({ couponCode: code });
+    mockOrdersApi({ orders: [order], detailByIdFn: () => ({ amountSummary: { subtotal: 100, discount: 15 } }) });
+
+    const summary = await importGlobalOrders({ backfill: true, dryRun: true });
+    assert.equal(summary.dryRun, true);
+    assert.equal(summary.wouldImport, 1);
+    assert.equal(summary.imported, 0);
+    assert.deepEqual(summary.wouldCreateCoupons, [code]);
+    const { rowCount: couponCount } = await pool.query('SELECT 1 FROM coupons WHERE code = $1', [code]);
+    const { rowCount: redemptionCount } = await pool.query('SELECT 1 FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+    assert.equal(couponCount, 0);
+    assert.equal(redemptionCount, 0);
+});
+
+test('a refunded MAIN-location order releases its redemption', async () => {
+    const code = await createTestCoupon({ type: 'general' });
+    const order = baseOrder({ couponCode: code, altId: MAIN_LOCATION_ID });
+    try {
+        mockOrdersApi({ orders: [], mainOrders: [order], detailByIdFn: () => ({ amountSummary: { subtotal: 100, discount: 15 } }) });
+        await importGlobalOrders({});
+        mockOrdersApi({ orders: [], mainOrders: [{ ...order, paymentStatus: 'refunded' }] });
+        const summary = await importGlobalOrders({});
+        assert.equal(summary.locations.main.refunded, 1);
+        assert.equal((await couponStore.findRedemptionByPaymentReference(`ghl:${order._id}`)).status, 'released');
     } finally {
         await cleanupCoupon(code);
     }
@@ -159,18 +323,20 @@ test('skips orders whose coupon has no linked affiliate', async () => {
 test('skips test/non-live orders', async () => {
     const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: 'someone2@example.com' });
     const order = baseOrder({ couponCode: code, liveMode: false });
-    mockOrdersApi({ orders: [order] });
+    const markedTest = baseOrder({ couponCode: code });
+    mockOrdersApi({ orders: [order, markedTest], detailByIdFn: () => ({ markAsTest: true }) });
 
     try {
         const summary = await importGlobalOrders({});
-        assert.equal(summary.skipped.test, 1);
+        // Order 1 is liveMode:false on the list item; order 2 is only markAsTest on its detail.
+        assert.equal(summary.skipped.test, 2);
         assert.equal(summary.imported, 0);
     } finally {
         await cleanupCoupon(code);
     }
 });
 
-test('attributes to a campaign only when exactly one active GLOBAL campaign matches the order product', async () => {
+test('never attributes a campaign, even when exactly one active GLOBAL campaign matches the order product', async () => {
     const email = `ghl.campaign.${Date.now()}@example.com`;
     const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: email, affiliateFeePercent: 0.10 });
     const site = await createTestCampaignSite({ channel: 'global', products: [{ kind: 'ghl', ref: 'prod_match', name: 'Matched Product' }] });
@@ -191,44 +357,9 @@ test('attributes to a campaign only when exactly one active GLOBAL campaign matc
         const summary = await importGlobalOrders({});
         assert.equal(summary.imported, 1);
         const { rows } = await pool.query('SELECT campaign_id FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
-        assert.equal(rows[0].campaign_id, campaignId);
-
-        await pool.query('DELETE FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(rows[0].campaign_id, null);
     } finally {
         if (campaignId) await pool.query('DELETE FROM campaigns WHERE id = $1', [campaignId]);
-        await cleanupCampaignSite(site.id);
-        await cleanupCoupon(code);
-    }
-});
-
-test('leaves campaign_id null when the order product matches zero or multiple active campaigns', async () => {
-    const email = `ghl.ambiguous.${Date.now()}@example.com`;
-    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: email });
-    const site = await createTestCampaignSite({ channel: 'global', products: [{ kind: 'ghl', ref: 'prod_ambiguous', name: 'Ambiguous Product' }] });
-
-    let campaignIdA, campaignIdB;
-    try {
-        const campaignStore = require('../utils/campaignStore');
-        const campA = await campaignStore.createCampaign({ name: 'Global Campaign A', couponCode: code, destinationUrl: site.url, siteId: site.id });
-        campaignIdA = campA.id;
-        const campB = await campaignStore.createCampaign({ name: 'Global Campaign B', couponCode: code, destinationUrl: site.url, siteId: site.id });
-        campaignIdB = campB.id;
-
-        const order = baseOrder({ couponCode: code });
-        mockOrdersApi({
-            orders: [order],
-            detailByIdFn: () => ({ amountSummary: { discount: 15 }, items: [{ product: { _id: 'prod_ambiguous' } }] })
-        });
-
-        const summary = await importGlobalOrders({});
-        assert.equal(summary.imported, 1);
-        const { rows } = await pool.query('SELECT campaign_id FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
-        assert.equal(rows[0].campaign_id, null);
-
-        await pool.query('DELETE FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
-    } finally {
-        if (campaignIdA) await pool.query('DELETE FROM campaigns WHERE id = $1', [campaignIdA]);
-        if (campaignIdB) await pool.query('DELETE FROM campaigns WHERE id = $1', [campaignIdB]);
         await cleanupCampaignSite(site.id);
         await cleanupCoupon(code);
     }
@@ -320,6 +451,29 @@ test('refund after affiliate payout flags for review instead of clawing back', a
         assert.ok(afterRefund.refundedAt);
     } finally {
         await pool.query('DELETE FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        await cleanupCoupon(code);
+    }
+});
+
+test('every import run first retries pending affiliate-coupon pushes', async () => {
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: 'retry@example.com' });
+    await couponStore.setGhlSyncState(code, 'main', { status: 'error', locationId: MAIN_LOCATION_ID, error: 'GHL down' });
+    await pool.query(`UPDATE coupons SET ghl_sync = jsonb_set(ghl_sync, '{main,at}', to_jsonb((now() - interval '5 minutes')::text)) WHERE code = $1`, [code]);
+
+    mockOrdersApi({ orders: [], mainOrders: [] });
+    ghlService.listCouponsForLocation = async () => ({ coupons: [] });
+    ghlService.createCouponForLocation = async (location) => {
+        return { id: `pushed_${location.locationId}` };
+    };
+
+    try {
+        const summary = await importGlobalOrders({});
+        // Scoped to this coupon: other test files share the database and may retry it too.
+        assert.ok(summary.pushRetry, 'the import ran the pending-push retry');
+        assert.equal((await couponStore.findCoupon(code)).ghlSync.main.status, 'synced');
+    } finally {
+        delete ghlService.listCouponsForLocation;
+        delete ghlService.createCouponForLocation;
         await cleanupCoupon(code);
     }
 });

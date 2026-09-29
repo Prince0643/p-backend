@@ -129,8 +129,34 @@ class GhlService {
     resolveGlobalLocation() {
         const targetId = process.env.GHL_GLOBAL_LOCATION_ID || process.env.GHL_LOCATION_ID_NEXISTRY_CORE_GLOBAL;
         if (!targetId) return null;
-        const locations = this.getConfiguredLocations();
-        return locations.find((l) => l.locationId === targetId) || null;
+        const configured = this.getConfiguredLocations().find((l) => l.locationId === targetId);
+        if (configured) return configured;
+        // GHL_LOCATIONS_JSON may be unset (prod): fall back to a dedicated env key for the
+        // Global location.
+        if (process.env.GHL_GLOBAL_PRIVATE_KEY) {
+            return { name: 'Nexistry Core Global', locationId: targetId, privateKey: process.env.GHL_GLOBAL_PRIVATE_KEY };
+        }
+        return null;
+    }
+
+    /** The MAIN location, straight from env GHL_LOCATION_ID + GHL_PRIVATE_KEY (independent of GHL_LOCATIONS_JSON). */
+    resolveMainLocation() {
+        if (!this.privateKey || !this.locationId) return null;
+        return { name: process.env.GHL_BUSINESS_NAME || 'Main', locationId: this.locationId, privateKey: this.privateKey };
+    }
+
+    /**
+     * The two locations order import and affiliate-coupon push work against, keyed
+     * 'global' | 'main'. Unconfigured ones are omitted; MAIN is omitted when it is the
+     * same GHL location as GLOBAL.
+     */
+    getTrackedLocations() {
+        const locations = [];
+        const global = this.resolveGlobalLocation();
+        if (global) locations.push({ key: 'global', ...global });
+        const main = this.resolveMainLocation();
+        if (main && (!global || global.locationId !== main.locationId)) locations.push({ key: 'main', ...main });
+        return locations;
     }
 
     /** Lists all products in the Global GHL location, with best-effort price lookup (null if unavailable). */
@@ -471,7 +497,10 @@ class GhlService {
      * their `ghlLocationIds` (or every location when that's null). `dryRun: true` reports
      * the planned creates/updates without writing anything.
      */
-    async syncCouponsToGhlLocations(coupons = [], { dryRun = false } = {}) {
+    async syncCouponsToGhlLocations(allCoupons = [], { dryRun = false } = {}) {
+        // Coupons discovered from native GHL orders (origin 'ghl') already live in GHL and
+        // are owned there - they must never be created/updated from our side.
+        const coupons = allCoupons.filter((coupon) => coupon.origin !== 'ghl');
         const allLocations = this.getConfiguredLocations();
         const activeCoupons = coupons.filter((coupon) => coupon.active);
         const inactiveCoupons = coupons.filter((coupon) => !coupon.active);

@@ -232,6 +232,16 @@ if (process.env.NODE_ENV === 'production') {
     };
     setTimeout(runImport, 30 * 1000);
     setInterval(runImport, IMPORT_INTERVAL_MS);
+
+    // Retry GHL student-account creations that failed at payment time (max 5 attempts each).
+    const { retryFailed: retryStudentUsers } = require('./services/ghlStudentUsers');
+    const runStudentRetry = () => {
+        retryStudentUsers().catch((err) => {
+            console.error('GHL student account retry failed:', err.message);
+        });
+    };
+    setTimeout(runStudentRetry, 60 * 1000);
+    setInterval(runStudentRetry, IMPORT_INTERVAL_MS);
 }
 
 module.exports = app;

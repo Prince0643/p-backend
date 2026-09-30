@@ -286,3 +286,25 @@ WHERE source = 'ghl' AND ghl_order_id IS NULL AND payment_reference LIKE 'ghl:%'
 -- whole affiliate flow can be verified without real money. is_test rows are NEVER counted in
 -- totals, payouts, usage limits or holds - they are only listed (with a TEST badge).
 ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
+
+-- GHL student accounts: one row per paid Practice Access / Premium payment (payment_reference is
+-- the idempotency key, so a repeated PayMongo webhook never creates a second GHL user). The
+-- generated password is NEVER stored here - it only travels in the LeadConnector webhook.
+-- 'pending' = attempt in flight; failed rows are retried by the production scheduler.
+CREATE TABLE IF NOT EXISTS ghl_student_users (
+    id                 BIGSERIAL PRIMARY KEY,
+    payment_reference  TEXT NOT NULL UNIQUE,
+    email              TEXT NOT NULL,
+    full_name          TEXT,
+    product_id         TEXT,
+    ghl_user_id        TEXT,
+    status             TEXT NOT NULL DEFAULT 'pending',
+    error              TEXT,
+    attempts           INTEGER NOT NULL DEFAULT 1,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE ghl_student_users DROP CONSTRAINT IF EXISTS ghl_student_users_status_check;
+ALTER TABLE ghl_student_users ADD CONSTRAINT ghl_student_users_status_check CHECK (status IN ('pending', 'created', 'existing', 'failed'));
+CREATE INDEX IF NOT EXISTS idx_ghl_student_users_status ON ghl_student_users(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_ghl_student_users_email_lower ON ghl_student_users (lower(email));

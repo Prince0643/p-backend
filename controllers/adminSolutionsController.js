@@ -1,6 +1,8 @@
 const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 const couponStore = require('../utils/couponStore');
 const ghlService = require('../services/ghlService');
+const ghlStudentUserStore = require('../utils/ghlStudentUserStore');
+const ghlStudentUsers = require('../services/ghlStudentUsers');
 
 /** Adds the Global/Main key for a GHL row's location id (null when it isn't a tracked location). */
 function withLocation(transaction) {
@@ -56,8 +58,21 @@ exports.getOne = async (req, res) => {
                 }
                 : null;
         }
+        if (transaction.type === 'academy_product' && ghlStudentUsers.isStudentProduct(transaction.productId)) {
+            body.ghlStudentUser = await ghlStudentUserStore.findByPaymentReference(transaction.transactionId);
+        }
         res.json(body);
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to get transaction' });
+    }
+};
+
+exports.listStudentUsers = async (req, res) => {
+    try {
+        const { status, email, limit } = req.query;
+        const students = await ghlStudentUserStore.list({ status, email, limit });
+        res.json({ success: true, students });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to list GHL student users' });
     }
 };

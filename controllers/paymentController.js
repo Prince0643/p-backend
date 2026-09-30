@@ -10,6 +10,7 @@ const { findProduct } = require('../utils/productCatalog');
 const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleStore');
 const couponStore = require('../utils/couponStore');
 const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
+const ghlStudentUsers = require('../services/ghlStudentUsers');
 
 async function resolveCatalogProduct({ productId, productName }) {
     const byId = productId ? await findProduct({ productId }) : null;
@@ -882,11 +883,27 @@ async function handlePaymentSuccess(attributes) {
         console.log('GHL sync error (non-fatal):', err.response?.data || err.message);
     }
 
+    // GHL Practice Access / Premium: create the buyer as a GHL user in the Students sub-account
+    // BEFORE the paid webhook so it can carry the login. Never throws or blocks payment
+    // handling for long (bounded timeout inside); failures become status 'failed' + a retry.
+    let ghlStudentAccount = null;
+    try {
+        ghlStudentAccount = await ghlStudentUsers.provisionForPayment({
+            paymentReference: metadata.paymentReference || paymentData.id,
+            email: metadata.email,
+            fullName: metadata.fullName,
+            productId: metadata.productId
+        });
+    } catch (err) {
+        console.log('GHL student account error (non-fatal):', err.message);
+    }
+
     await webhookService.sendToLeadConnector({
         ...metadata,
         status: 'payment_successful',
         paymentId: paymentData.id,
         paymentDetails: attributes,
+        ...(ghlStudentAccount ? { ghlStudentAccount } : {}),
         completedAt: new Date().toISOString()
     }).catch(err => {
         console.log('LeadConnector webhook error (non-fatal):', err.response?.data || err.message);

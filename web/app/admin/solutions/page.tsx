@@ -45,6 +45,42 @@ type GhlRaw = {
   items?: { name?: string | null; productId?: string | null; quantity?: number | null; price?: number | null }[];
 };
 
+type StudentUser = {
+  status: "pending" | "created" | "existing" | "failed";
+  ghlUserId: string | null;
+  email: string;
+  error: string | null;
+  attempts: number;
+  updatedAt: string;
+};
+
+// Products that auto-create a GHL user in the Students sub-account (see GHL_STUDENT_USER_PRODUCTS).
+const STUDENT_PRODUCTS = ["ghl_practice_access", "ghl_premium_plan"];
+const isStudentTx = (t: Transaction) => t.type === "academy_product" && !!t.productId && STUDENT_PRODUCTS.includes(t.productId);
+
+function StudentAudit({ student }: { student: StudentUser | null }) {
+  const tone =
+    student?.status === "failed" ? "text-red-300" : student?.status === "pending" ? "text-amber-300" : "text-emerald-300";
+  return (
+    <div className="space-y-1 text-xs">
+      <div className="font-bold uppercase tracking-wide text-slate-300">GHL student account (Students sub-account)</div>
+      {!student ? (
+        <div className="text-slate-400">No GHL student account recorded for this payment (not paid yet, or paid before this feature).</div>
+      ) : (
+        <>
+          <div>
+            Status: <b className={tone}>{student.status}</b> (attempts: {student.attempts})
+          </div>
+          <div>Email: {student.email}</div>
+          <div>GHL user ID: {student.ghlUserId ? <code className="select-all">{student.ghlUserId}</code> : "-"}</div>
+          {student.error && <div className="text-red-300">Error: {student.error}</div>}
+          <div className="text-slate-500">Updated: {new Date(student.updatedAt).toLocaleString()}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 type LinkedRedemption = {
   id: string;
   code: string;
@@ -179,7 +215,7 @@ export default function SolutionsPage() {
   const [modeFilter, setModeFilter] = useState("");
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<{ transaction: Transaction; redemption: LinkedRedemption | null } | null>(null);
+  const [detail, setDetail] = useState<{ transaction: Transaction; redemption: LinkedRedemption | null; student: StudentUser | null } | null>(null);
 
   const load = useCallback(async (key: string, type: string, status: string, mode: string) => {
     const params = new URLSearchParams();
@@ -223,11 +259,11 @@ export default function SolutionsPage() {
     setOpenId(t.id);
     setDetail(null);
     try {
-      const data = await apiFetch<{ transaction: Transaction; redemption?: LinkedRedemption | null }>(
+      const data = await apiFetch<{ transaction: Transaction; redemption?: LinkedRedemption | null; ghlStudentUser?: StudentUser | null }>(
         `/api/admin/solutions/${encodeURIComponent(t.transactionId)}`,
         key
       );
-      setDetail({ transaction: data.transaction, redemption: data.redemption ?? null });
+      setDetail({ transaction: data.transaction, redemption: data.redemption ?? null, student: data.ghlStudentUser ?? null });
     } catch (e) {
       if (!handleAuthError(e)) toast((e as Error).message);
     }
@@ -317,7 +353,7 @@ export default function SolutionsPage() {
                       </td>
                       <td className="p-2">
                         {TYPE_LABELS[t.type] || t.type}
-                        {t.type === "ghl_order" && (
+                        {(t.type === "ghl_order" || isStudentTx(t)) && (
                           <>
                             <br />
                             <span className="text-slate-400">{locationLabel(t)}</span>
@@ -366,7 +402,11 @@ export default function SolutionsPage() {
                       <tr className="border-t border-white/10 bg-white/[.02]">
                         <td colSpan={9} className="p-3">
                           {detail && detail.transaction.id === t.id ? (
-                            <GhlAudit transaction={detail.transaction} redemption={detail.redemption} onCopied={() => toast("Order ID copied.")} />
+                            detail.transaction.type === "ghl_order" ? (
+                              <GhlAudit transaction={detail.transaction} redemption={detail.redemption} onCopied={() => toast("Order ID copied.")} />
+                            ) : (
+                              <StudentAudit student={detail.student} />
+                            )
                           ) : (
                             <span className="text-slate-400">Loading…</span>
                           )}

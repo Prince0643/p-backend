@@ -5,6 +5,7 @@ const { requireAdminAuth } = require('../middleware/adminAuth');
 
 router.use(requireAdminAuth);
 
+router.get('/ghl-student-users', adminSolutionsController.listStudentUsers);
 router.get('/solutions', adminSolutionsController.list);
 router.get('/solutions/:transactionId', adminSolutionsController.getOne);
 

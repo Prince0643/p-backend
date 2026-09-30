@@ -454,6 +454,18 @@ Notes:
 | `GHL_PRIVATE_KEY` | No | GoHighLevel API private key |
 | `GHL_LOCATION_ID` | No | GoHighLevel location ID |
 | `GHL_BUSINESS_NAME` | No | Business name for invoices (default: "Nexistry Academy") |
+| `GHL_LOCATION_ID_NEXISTRY_ACADEMY_STUDENTS` | No | GHL sub-account "Nexistry Academy (Students)" (`v2W0eRHua65rErE7Jsw2`) where student users are created |
+| `GHL_PRIVATE_KEY_NEXISTRY_ACADEMY_STUDENTS` | No | Private Integration token of that location (needs `users.readonly` + `users.write`) |
+| `GHL_STUDENTS_COMPANY_ID` | No | GHL agency/company id required by Create User (default `hv6XwC1sqbvEgneGm5AY`) |
+| `GHL_STUDENT_USER_PRODUCTS` | No | Comma-separated product ids that auto-create a GHL student user (default `ghl_practice_access,ghl_premium_plan`) |
+
+**GHL student accounts.** When a `payment.paid` webhook arrives for a product in `GHL_STUDENT_USER_PRODUCTS`, `services/ghlStudentUsers.js` looks the buyer's email up in the Students location (`GET /users/?locationId=...`, case-insensitive match, then a best-effort `GET /users/search`), and if absent creates a GHL user (`POST /users/`, `type: account`, `role: admin`, template in `services/ghlStudentUserTemplate.js`) with a random 16-character password. The result is recorded in `ghl_student_users` (one row per payment reference; status `pending|created|existing|failed`, GHL user id, error, attempts; the password is never stored or logged) and the paid LeadConnector webhook gets an extra field:
+
+```json
+"ghlStudentAccount": { "email": "buyer@example.com", "password": "<only when status=created>", "loginUrl": "https://app.gohighlevel.com/", "status": "created" }
+```
+
+`status` is `created`, `existing` (user already in the location; nothing changed, no password) or `failed` (no password). Failed rows are retried every 10 minutes in production (up to 5 attempts); a successful retry sends a follow-up LeadConnector webhook `{ "event": "ghl_student_account_created", "paymentReference", "productId", "fullName", "email", "ghlStudentAccount": {...} }`. Admin: `GET /api/admin/ghl-student-users?status=&email=&limit=` lists the rows; the Solutions page Audit panel shows the status for these products. Manual create/retry: `node scripts/createGhlStudentUser.js --payment-ref REF | --email E --name N [--product ID] [--apply] [--print-password]` (dry run by default).
 
 #### LeadConnector Webhook (Optional)
 

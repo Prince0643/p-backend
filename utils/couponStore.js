@@ -328,6 +328,7 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
                  WHERE c2.type = 'affiliate'
                    AND lower(cr.email) = $1
                    AND cr.status = 'paid'
+                   AND cr.is_test = false
                  LIMIT 1`,
                 [normalizedEmail]
             );
@@ -355,6 +356,7 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
                  WHERE code = $1
                    AND lower(email) = $2
                    AND status = 'paid'
+                   AND is_test = false
                  LIMIT 1`,
                 [normalizedCode, normalizedEmail]
             );
@@ -370,7 +372,7 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
         // superseded by the real checkout, so they must not block the quote either.
         const { rows: countRows } = await db.query(
             `SELECT COUNT(*)::int AS count FROM coupon_redemptions
-             WHERE code = $1
+             WHERE code = $1 AND is_test = false
                AND (status = 'paid' OR (status = 'pending' AND created_at > now() - $2::interval
                                         AND ($3::text IS NULL OR lower(coalesce(email, '')) <> $3)))`,
             [normalizedCode, `${PENDING_RESERVATION_TTL_MINUTES} minutes`, normalizedEmail || null]
@@ -534,7 +536,8 @@ function rowToRedemption(row) {
         refundedAt: row.refunded_at ? new Date(row.refunded_at).toISOString() : null,
         needsReview: Boolean(row.needs_review),
         commissionBase: row.commission_base != null ? Number(row.commission_base) : null,
-        ghlOrderId: row.ghl_order_id || null
+        ghlOrderId: row.ghl_order_id || null,
+        isTest: Boolean(row.is_test)
     };
 }
 
@@ -615,7 +618,7 @@ async function markRedemptionsPaid(ids) {
     const idList = (Array.isArray(ids) ? ids : [ids]).map(String);
     const { rows } = await pool.query(
         `UPDATE coupon_redemptions SET affiliate_paid_at = now()
-         WHERE id = ANY($1::text[]) AND status = 'paid' AND affiliate_paid_at IS NULL
+         WHERE id = ANY($1::text[]) AND status = 'paid' AND affiliate_paid_at IS NULL AND is_test = false
          RETURNING id`,
         [idList]
     );
@@ -626,7 +629,7 @@ async function markRedemptionsPaid(ids) {
 }
 
 /**
- * Inserts a GLOBAL (GHL-sourced) redemption directly as 'paid' - the GHL order import
+ * Inserts a GLOBAL (GHL-sourced) redemption directly as 'paid' (entry.isTest marks a GHL test-mode order - never real money) - the GHL order import
  * already fetched full order detail before calling this, unlike the PayMongo
  * reservation flow. Idempotent via ON CONFLICT (payment_reference) DO NOTHING; returns
  * null (not inserted, already exists) or the inserted row.
@@ -638,8 +641,8 @@ async function insertGhlRedemption(entry) {
         `INSERT INTO coupon_redemptions
             (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount,
              affiliate_fee_amount, affiliate_email, currency, status, created_at, paid_at, campaign_id,
-             source, ghl_location_id, ghl_product_ids, commission_base, ghl_order_id)
-         VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,'paid',$11,$11,NULL,'ghl',$12,$13,$14,$15)
+             source, ghl_location_id, ghl_product_ids, commission_base, ghl_order_id, is_test)
+         VALUES ($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,'paid',$11,$11,NULL,'ghl',$12,$13,$14,$15,$16)
          ON CONFLICT (payment_reference) DO NOTHING
          RETURNING *`,
         [
@@ -648,7 +651,8 @@ async function insertGhlRedemption(entry) {
             Number(entry.baseAmount) || 0, Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
             entry.affiliateEmail || null, entry.currency || 'USD', entry.createdAt || new Date().toISOString(),
             entry.ghlLocationId || null, entry.ghlProductIds || [],
-            entry.commissionBase != null ? Number(entry.commissionBase) : null, String(entry.orderId)
+            entry.commissionBase != null ? Number(entry.commissionBase) : null, String(entry.orderId),
+            Boolean(entry.isTest)
         ]
     );
     return rows[0] ? rowToRedemption(rows[0]) : null;
@@ -758,7 +762,7 @@ async function setCouponAffiliation(code, { type, affiliateEmail, affiliateFeePe
 async function listCreditableRedemptions(code) {
     const { rows } = await pool.query(
         `SELECT * FROM coupon_redemptions
-         WHERE code = $1 AND source = 'ghl' AND status = 'paid' AND affiliate_email IS NULL
+         WHERE code = $1 AND source = 'ghl' AND status = 'paid' AND affiliate_email IS NULL AND is_test = false
          ORDER BY created_at DESC`,
         [toCouponCode(code)]
     );
@@ -775,7 +779,7 @@ async function creditRedemptions(code, { affiliateEmail, feePercent, redemptionI
         `UPDATE coupon_redemptions
          SET affiliate_email = $2,
              affiliate_fee_amount = ROUND(COALESCE(commission_base, GREATEST(base_amount - discount_amount, 0)) * $3::numeric, 2)
-         WHERE code = $1 AND source = 'ghl' AND status = 'paid' AND affiliate_email IS NULL
+         WHERE code = $1 AND source = 'ghl' AND status = 'paid' AND affiliate_email IS NULL AND is_test = false
            AND ($4::text[] IS NULL OR id = ANY($4::text[]))
          RETURNING *`,
         [toCouponCode(code), affiliateEmail, feePercent, redemptionIds]
@@ -797,7 +801,7 @@ function netRevenue(r) {
 function totalsByCurrencyForCoupon(redemptions) {
     const totals = {};
     for (const r of redemptions) {
-        if (r.status !== 'paid') continue;
+        if (r.status !== 'paid' || r.isTest) continue;
         const t = totals[r.currency] || (totals[r.currency] = { orders: 0, revenue: 0, discount: 0, commission: 0 });
         t.orders += 1;
         t.revenue += netRevenue(r);
@@ -806,6 +810,26 @@ function totalsByCurrencyForCoupon(redemptions) {
     }
     for (const t of Object.values(totals)) {
         for (const k of ['revenue', 'discount', 'commission']) t[k] = Number(t[k].toFixed(2));
+    }
+    return totals;
+}
+
+/**
+ * Per-currency TEST totals (paid is_test rows only): { [currency]: { sales, commission } }.
+ * Shown separately from the live totals above; never payable.
+ */
+function testTotalsByCurrency(redemptions) {
+    const totals = {};
+    for (const r of redemptions) {
+        if (r.status !== 'paid' || !r.isTest) continue;
+        const cur = r.currency || 'PHP';
+        const t = totals[cur] || (totals[cur] = { sales: 0, commission: 0 });
+        t.sales += netRevenue(r);
+        t.commission += r.affiliateFeeAmount;
+    }
+    for (const t of Object.values(totals)) {
+        t.sales = Number(t.sales.toFixed(2));
+        t.commission = Number(t.commission.toFixed(2));
     }
     return totals;
 }
@@ -824,7 +848,7 @@ async function listRedemptionsForAffiliate({ email, couponCode }) {
     return rows.map(rowToRedemption);
 }
 
-/** Every paid redemption that is credited to some affiliate (by email or by an affiliate's own coupon). */
+/** Every paid redemption (INCLUDING is_test rows - the totals helpers skip those) that is credited to some affiliate (by email or by an affiliate's own coupon). */
 async function listPaidAffiliateRedemptions() {
     const { rows } = await pool.query(
         `SELECT * FROM coupon_redemptions
@@ -838,7 +862,7 @@ async function listPaidAffiliateRedemptions() {
 function affiliateTotalsByCurrency(redemptions) {
     const totals = {};
     for (const r of redemptions) {
-        if (r.status !== 'paid') continue;
+        if (r.status !== 'paid' || r.isTest) continue;
         const t = totals[r.currency || 'PHP'] || (totals[r.currency || 'PHP'] = { sales: 0, commission: 0, earned: 0, paidOut: 0, unpaid: 0 });
         t.sales += netRevenue(r);
         t.commission += r.affiliateFeeAmount;
@@ -885,5 +909,6 @@ module.exports = {
     totalsByCurrencyForCoupon,
     listRedemptionsForAffiliate,
     listPaidAffiliateRedemptions,
-    affiliateTotalsByCurrency
+    affiliateTotalsByCurrency,
+    testTotalsByCurrency
 };

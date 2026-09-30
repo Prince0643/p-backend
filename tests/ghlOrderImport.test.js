@@ -110,7 +110,7 @@ test('imports a paid order with a matching affiliate coupon, USD currency and co
         const summary = await importGlobalOrders({});
         assert.equal(summary.scanned, 1);
         assert.equal(summary.imported, 1);
-        assert.deepEqual(summary.skipped, { noCoupon: 0, invoice: 0, test: 0 });
+        assert.deepEqual(summary.skipped, { noCoupon: 0, invoice: 0, testUnknownCoupon: 0 });
 
         const { rows } = await pool.query('SELECT * FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
         assert.equal(rows.length, 1);
@@ -320,17 +320,25 @@ test('a refunded MAIN-location order releases its redemption', async () => {
     }
 });
 
-test('skips test/non-live orders', async () => {
-    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: 'someone2@example.com' });
+test('test/non-live orders with a known coupon are recorded as is_test redemptions (list liveMode:false and detail markAsTest)', async () => {
+    const email = `ghl.testmode.${Date.now()}@example.com`;
+    const code = await createTestCoupon({ type: 'affiliate', discountPercent: 0.15, affiliateFeePercent: 0.10, affiliateEmail: email });
     const order = baseOrder({ couponCode: code, liveMode: false });
     const markedTest = baseOrder({ couponCode: code });
-    mockOrdersApi({ orders: [order, markedTest], detailByIdFn: () => ({ markAsTest: true }) });
+    mockOrdersApi({ orders: [order, markedTest], detailByIdFn: () => ({ amountSummary: { subtotal: 100, discount: 15 }, markAsTest: true }) });
 
     try {
         const summary = await importGlobalOrders({});
         // Order 1 is liveMode:false on the list item; order 2 is only markAsTest on its detail.
-        assert.equal(summary.skipped.test, 2);
-        assert.equal(summary.imported, 0);
+        assert.equal(summary.imported, 2);
+        assert.equal(summary.skipped.testUnknownCoupon, 0);
+        const { rows } = await pool.query('SELECT * FROM coupon_redemptions WHERE code = $1', [code]);
+        assert.equal(rows.length, 2);
+        for (const r of rows) {
+            assert.equal(r.is_test, true);
+            assert.equal(r.affiliate_email, email);
+            assert.equal(Number(r.affiliate_fee_amount), 8.5);
+        }
     } finally {
         await cleanupCoupon(code);
     }
@@ -558,7 +566,7 @@ test('live paid coupon order: redemption (affiliate credit) AND a solutions row'
     }
 });
 
-test('test-mode order (liveMode false or markAsTest): solutions row with is_test, no redemption, no coupon created', async () => {
+test('test-mode order with an UNKNOWN code: solutions row with is_test, no redemption, no coupon created', async () => {
     const code = `GHLTEST${Date.now().toString(36).toUpperCase()}`;
     const listTest = solOrder({ couponCode: code, liveMode: false });
     const detailTest = solOrder({ couponCode: code });
@@ -566,7 +574,7 @@ test('test-mode order (liveMode false or markAsTest): solutions row with is_test
     const summary = await importGlobalOrders({});
     assert.equal(summary.solutionsRecorded, 2);
     assert.equal(summary.imported, 0);
-    assert.equal(summary.skipped.test, 2);
+    assert.equal(summary.skipped.testUnknownCoupon, 2);
     for (const order of [listTest, detailTest]) {
         const rows = await solutionRow(order);
         assert.equal(rows.length, 1);
@@ -635,3 +643,106 @@ test('dry run writes no solutions rows', async () => {
     assert.equal((await solutionRow(order)).length, 0);
 });
 
+
+// ---- Test-mode redemptions (coupon_redemptions.is_test) ----
+function testOrder(overrides = {}) {
+    return solOrder({ amount: 170, subtotal: 200, discount: 30, liveMode: false, ...overrides });
+}
+const testDetail = (order) => detailFor(order, { markAsTest: true, liveMode: false });
+
+test('paid test order with a known affiliate coupon: is_test redemption, fee on subtotal - discount, affiliate attached', async () => {
+    const email = `ghl.test.aff.${Date.now()}@example.com`;
+    const code = await createTestCoupon({ type: 'affiliate', discountPercent: 0.15, affiliateFeePercent: 0.10, affiliateEmail: email });
+    const order = testOrder({ couponCode: code });
+    mockSolApi([order], () => testDetail(order));
+    try {
+        const summary = await importGlobalOrders({});
+        assert.equal(summary.imported, 1);
+        const { rows } = await pool.query('SELECT * FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].is_test, true);
+        assert.equal(rows[0].status, 'paid');
+        assert.equal(rows[0].affiliate_email, email);
+        assert.equal(Number(rows[0].commission_base), 170);
+        assert.equal(Number(rows[0].affiliate_fee_amount), 17);
+        assert.equal(rows[0].currency, 'USD');
+        assert.equal((await solutionRow(order))[0].is_test, true, 'solutions row unchanged');
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('live order keeps is_test false', async () => {
+    const code = await createTestCoupon({ type: 'affiliate', affiliateEmail: `ghl.live.${Date.now()}@example.com` });
+    const order = solOrder({ couponCode: code });
+    mockSolApi([order], () => detailFor(order));
+    try {
+        await importGlobalOrders({});
+        const { rows } = await pool.query('SELECT is_test FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(rows[0].is_test, false);
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('test order with an unknown coupon code creates no coupon and no redemption (counted in the summary, also on dry run)', async () => {
+    const code = `TSTUNK${Date.now().toString(36).toUpperCase()}`;
+    const order = testOrder({ couponCode: code });
+    mockSolApi([order], () => testDetail(order));
+    const dry = await importGlobalOrders({ dryRun: true });
+    assert.equal(dry.skipped.testUnknownCoupon, 1);
+    const summary = await importGlobalOrders({});
+    assert.equal(summary.skipped.testUnknownCoupon, 1);
+    assert.equal(summary.imported, 0);
+    assert.equal(summary.couponsCreated, 0);
+    assert.equal((await pool.query('SELECT 1 FROM coupons WHERE code = $1', [code])).rowCount, 0);
+    assert.equal((await pool.query('SELECT 1 FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`])).rowCount, 0);
+    assert.equal((await solutionRow(order)).length, 1, 'solutions row is still recorded');
+});
+
+test('an existing test order already in solutions (no redemption) backfills on the next run, without a re-fetch block', async () => {
+    const email = `ghl.test.backfill.${Date.now()}@example.com`;
+    const code = await createTestCoupon({ type: 'affiliate', affiliateFeePercent: 0.10, affiliateEmail: email });
+    const order = testOrder({ couponCode: code });
+    mockSolApi([order], () => testDetail(order));
+    try {
+        // Simulate the previous release: solutions row present, no redemption row.
+        await importGlobalOrders({});
+        await pool.query('DELETE FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal((await solutionRow(order)).length, 1);
+
+        const summary = await importGlobalOrders({});
+        assert.equal(summary.solutionsRecorded, 0);
+        assert.equal(summary.solutionsUpdated, 0, 'solutions row is unchanged (status same)');
+        assert.equal(summary.imported, 1, 'redemption created');
+        const { rows } = await pool.query('SELECT is_test, affiliate_fee_amount FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(rows[0].is_test, true);
+        assert.equal(Number(rows[0].affiliate_fee_amount), 17);
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('a refunded test order releases its test redemption; a partial refund flags it', async () => {
+    const code = await createTestCoupon({ type: 'affiliate', affiliateFeePercent: 0.10, affiliateEmail: `ghl.test.refund.${Date.now()}@example.com` });
+    const order = testOrder({ couponCode: code });
+    const partial = testOrder({ couponCode: code });
+    mockSolApi([order, partial], (id) => testDetail(id === order._id ? order : partial));
+    try {
+        await importGlobalOrders({});
+        order.paymentStatus = 'refunded';
+        partial.paymentStatus = 'partially_refunded';
+        const summary = await importGlobalOrders({});
+        assert.equal(summary.refunded, 1);
+        assert.equal(summary.flagged, 1);
+        const { rows } = await pool.query('SELECT status, is_test, needs_review, refunded_at FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(rows[0].status, 'released');
+        assert.equal(rows[0].is_test, true);
+        assert.ok(rows[0].refunded_at);
+        const { rows: pRows } = await pool.query('SELECT status, needs_review FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${partial._id}`]);
+        assert.equal(pRows[0].status, 'paid');
+        assert.equal(pRows[0].needs_review, true);
+    } finally {
+        await cleanupCoupon(code);
+    }
+});

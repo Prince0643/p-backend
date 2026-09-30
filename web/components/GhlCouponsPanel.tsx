@@ -38,6 +38,7 @@ type UsageRedemption = {
   createdAt: string;
   ghlOrderId?: string;
   ghlLocationKey?: string;
+  isTest?: boolean;
 };
 
 type UsageTotals = Record<string, { orders: number; revenue: number; discount: number; commission: number }>;
@@ -118,6 +119,9 @@ export function CouponUsageModal({ code, onClose, handlers }: { code: string; on
               { key: "commission", label: "Commission" },
             ]}
           />
+          {rows.some((r) => r.isTest) && (
+            <p className="text-xs text-fuchsia-200">TEST rows are GHL test-mode orders - listed for verification only, not counted in the totals above.</p>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <caption className="sr-only">Redemptions of coupon {code}</caption>
@@ -140,6 +144,9 @@ export function CouponUsageModal({ code, onClose, handlers }: { code: string; on
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] ${r.source === "ghl" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
                         {r.source === "ghl" ? "GHL" : "PayMongo"}
                       </span>
+                      {r.isTest && (
+                        <span className="ml-1 rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-2 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">TEST</span>
+                      )}
                       {r.status !== "paid" && <div className="mt-0.5 text-[10px] text-amber-300">{r.status}</div>}
                     </td>
                     <td className="p-2">

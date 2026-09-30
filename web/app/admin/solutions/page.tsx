@@ -54,6 +54,7 @@ type LinkedRedemption = {
   commissionBase: number | null;
   affiliateFeeAmount: number;
   currency: string;
+  isTest?: boolean;
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -137,14 +138,22 @@ function GhlAudit({ transaction: t, redemption, onCopied }: { transaction: Trans
       </div>
       <div className="space-y-1">
         <div className="font-bold uppercase tracking-wide text-slate-300">Affiliate credit (coupon_redemptions)</div>
-        {t.isTest ? (
-          <div className="text-fuchsia-200">Not credited (test mode).</div>
-        ) : !t.promoCode ? (
+        {!t.promoCode ? (
           <div className="text-slate-400">No coupon used - nothing to credit.</div>
         ) : !redemption ? (
-          <div className="text-amber-200">Coupon {t.promoCode} used, but no redemption recorded (yet).</div>
+          <div className={t.isTest ? "text-fuchsia-200" : "text-amber-200"}>
+            {t.isTest
+              ? `Test order with coupon ${t.promoCode}: no test redemption recorded (unknown code, or not paid yet).`
+              : `Coupon ${t.promoCode} used, but no redemption recorded (yet).`}
+          </div>
         ) : (
           <>
+            {redemption.isTest && (
+              <div>
+                <span className="rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-2 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">TEST</span>{" "}
+                <span className="text-fuchsia-200">Test redemption - not payable, not counted in totals.</span>
+              </div>
+            )}
             <div>Coupon: {redemption.code}</div>
             <div>Affiliate credited: {redemption.affiliateEmail || "unassigned"}</div>
             <div>Commission base: {money(redemption.commissionBase, redemption.currency)}</div>

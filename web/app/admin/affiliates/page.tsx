@@ -78,6 +78,17 @@ function renderPayout(a: Affiliate) {
   );
 }
 
+type TestRedemption = {
+  id: string;
+  code: string;
+  email: string;
+  status: string;
+  currency: string;
+  affiliateFeeAmount: number;
+  refundedAt: string | null;
+  isTest?: boolean;
+};
+
 export default function AffiliatesPage() {
   const { ready, admin, requireAuth, handleAuthError, logout } = useAdminAuth();
   const { message, toast } = useToast();
@@ -89,6 +100,8 @@ export default function AffiliatesPage() {
   const [coupon, setCoupon] = useState<Coupon | null>(null);
   const [statusChoice, setStatusChoice] = useState<string>("active");
   const [totals, setTotals] = useState<Record<string, { sales?: number; commission?: number }> | null>(null);
+  const [testTotals, setTestTotals] = useState<Record<string, { sales?: number; commission?: number }> | null>(null);
+  const [testRedemptions, setTestRedemptions] = useState<TestRedemption[]>([]);
 
   const loadAffiliates = useCallback(async (key: string) => {
     const data = await apiFetch<{ affiliates: Affiliate[] }>("/api/admin/affiliates", key);
@@ -96,13 +109,21 @@ export default function AffiliatesPage() {
   }, []);
 
   const loadDetail = useCallback(async (key: string, id: string) => {
-    const data = await apiFetch<{ affiliate: Affiliate; coupon: Coupon | null; totalsByCurrency?: Record<string, { sales?: number; commission?: number }> }>(
+    const data = await apiFetch<{
+      affiliate: Affiliate;
+      coupon: Coupon | null;
+      totalsByCurrency?: Record<string, { sales?: number; commission?: number }>;
+      testTotalsByCurrency?: Record<string, { sales?: number; commission?: number }>;
+      redemptions?: TestRedemption[];
+    }>(
       `/api/admin/affiliates/${encodeURIComponent(id)}`,
       key
     );
     setDetail(data.affiliate);
     setCoupon(data.coupon);
     setTotals(data.totalsByCurrency || null);
+    setTestTotals(data.testTotalsByCurrency || null);
+    setTestRedemptions((data.redemptions || []).filter((r) => r.isTest));
     setStatusChoice(data.affiliate.status);
   }, []);
 
@@ -268,6 +289,24 @@ export default function AffiliatesPage() {
                       {cur}: {formatMoney(t.sales ?? 0, cur)} sales · {formatMoney(t.commission ?? 0, cur)} commission
                     </div>
                   ))}
+                </DetailCard>
+              )}
+              {testRedemptions.length > 0 && (
+                <DetailCard label="Test redemptions (not payable)">
+                  {testTotals && Object.entries(testTotals).map(([cur, t]) => (
+                    <div key={cur} className="text-fuchsia-200">
+                      {cur}: {formatMoney(t.sales ?? 0, cur)} test sales · {formatMoney(t.commission ?? 0, cur)} test commission
+                    </div>
+                  ))}
+                  <div className="mt-1 space-y-1">
+                    {testRedemptions.map((r) => (
+                      <div key={r.id} className="text-xs">
+                        <span className="mr-1 rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-1.5 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">TEST</span>
+                        <span className="font-mono">{r.code}</span> · {r.email || "unknown buyer"} · {formatMoney(r.affiliateFeeAmount, r.currency)} fee · {r.status}
+                        {r.refundedAt ? " · refunded" : ""}
+                      </div>
+                    ))}
+                  </div>
                 </DetailCard>
               )}
               <DetailCard label="Registered">{new Date(detail.createdAt).toLocaleString()}</DetailCard>

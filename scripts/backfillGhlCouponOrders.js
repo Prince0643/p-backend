@@ -13,7 +13,7 @@ const { importGlobalOrders } = require('../services/ghlOrderImport');
 function printLocation(key, s, apply) {
     console.log(`\n[${key}] location ${s.locationId}`);
     console.log(`  scanned: ${s.scanned}`);
-    console.log(`  skipped: noCoupon=${s.skipped.noCoupon} invoice=${s.skipped.invoice} test=${s.skipped.test}`);
+    console.log(`  skipped: noCoupon=${s.skipped.noCoupon} invoice=${s.skipped.invoice} testUnknownCoupon=${s.skipped.testUnknownCoupon}`);
     if (apply) console.log(`  inserted redemptions: ${s.imported} (no affiliate: ${s.unassigned})`);
     else console.log(`  would insert redemptions: ${s.wouldImport}`);
     console.log(`  refunds applied: released=${s.refunded} flagged=${s.flagged}`);

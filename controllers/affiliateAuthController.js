@@ -27,13 +27,17 @@ exports.me = async (req, res) => {
         // (e.g. a GHL coupon an admin assigned to them).
         const redemptions = await couponStore.listRedemptionsForAffiliate({ email: affiliate.email, couponCode: affiliate.couponCode });
 
-        const paidRedemptions = redemptions.filter((r) => r.status === 'paid');
+        // GHL test-mode rows (isTest) are listed but never count toward earnings or stats.
+        const liveRedemptions = redemptions.filter((r) => !r.isTest);
+        const testRedemptions = redemptions.filter((r) => r.isTest);
+        const paidRedemptions = liveRedemptions.filter((r) => r.status === 'paid');
         const totalEarnings = paidRedemptions.reduce((sum, r) => sum + r.affiliateFeeAmount, 0);
 
         // Per-currency breakdown: LOCAL (PayMongo, PHP) and GLOBAL (GHL, USD) sales are
         // both credited to the same affiliate, so a single-currency total would mix
         // currencies. Derived from status='paid' rows only. `commission` == `earned`.
         const totalsByCurrency = couponStore.affiliateTotalsByCurrency(redemptions);
+        const testTotalsByCurrency = couponStore.testTotalsByCurrency(redemptions);
 
         res.json({
             success: true,
@@ -41,8 +45,10 @@ exports.me = async (req, res) => {
             coupon,
             redemptions,
             totalsByCurrency,
+            testTotalsByCurrency,
             stats: {
-                totalRedemptions: redemptions.length,
+                totalRedemptions: liveRedemptions.length,
+                testRedemptions: testRedemptions.length,
                 paidRedemptions: paidRedemptions.length,
                 totalEarnings: Number(totalEarnings.toFixed(2))
             }

@@ -53,12 +53,12 @@ async function ghlCoupon(code, overrides = {}) {
 }
 
 let orderSeq = 0;
-async function ghlRedemption(code, { subtotal = 100, discount = 20, currency = 'USD', locationId = 'loc_g' } = {}) {
+async function ghlRedemption(code, { subtotal = 100, discount = 20, currency = 'USD', locationId = 'loc_g', isTest = false } = {}) {
     orderSeq += 1;
     return couponStore.insertGhlRedemption({
         orderId: `adm_${Date.now()}_${orderSeq}`, code, email: `b${orderSeq}@example.com`, fullName: 'Buyer',
         baseAmount: subtotal, discountAmount: discount, commissionBase: subtotal - discount,
-        affiliateFeeAmount: 0, affiliateEmail: null, currency, ghlLocationId: locationId
+        affiliateFeeAmount: 0, affiliateEmail: null, currency, ghlLocationId: locationId, isTest
     });
 }
 
@@ -75,6 +75,7 @@ test('GET /ghl-coupons merges live GHL lists with DB coupons and reports a faili
     await ghlCoupon(code);
     await ghlRedemption(code);
     await ghlRedemption(code);
+    await ghlRedemption(code, { isTest: true }); // test-mode rows never count as usage
     stubGhl({ loc_g: [{ id: 'g1', code }], loc_m: [{ id: 'm1', code: localCode }] }, []);
 
     try {
@@ -238,7 +239,7 @@ test('GET /coupons/:code/usage lists redemptions and totals paid ones per curren
         const ghlRow = res.body.redemptions.find((r) => r.source === 'ghl');
         assert.deepEqual(Object.keys(ghlRow).sort(), [
             'affiliateEmail', 'affiliateFeeAmount', 'baseAmount', 'commissionBase', 'createdAt', 'currency', 'discountAmount',
-            'email', 'fullName', 'ghlLocationKey', 'ghlOrderId', 'id', 'source', 'status'
+            'email', 'fullName', 'ghlLocationKey', 'ghlOrderId', 'id', 'isTest', 'source', 'status'
         ]);
         assert.equal(ghlRow.ghlLocationKey, 'global');
         assert.ok(ghlRow.ghlOrderId);

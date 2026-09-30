@@ -51,7 +51,8 @@ exports.getOne = async (req, res) => {
                     discountAmount: redemption.discountAmount,
                     currency: redemption.currency,
                     refundedAt: redemption.refundedAt,
-                    needsReview: redemption.needsReview
+                    needsReview: redemption.needsReview,
+                    isTest: redemption.isTest
                 }
                 : null;
         }

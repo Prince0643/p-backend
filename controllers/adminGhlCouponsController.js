@@ -25,6 +25,7 @@ function toUsageRedemption(r, locationKeyById) {
         affiliateEmail: r.affiliateEmail || null,
         createdAt: r.createdAt,
         ghlOrderId: r.ghlOrderId,
+        isTest: r.isTest,
         ghlLocationKey: (r.ghlLocationId && locationKeyById.get(r.ghlLocationId)) || null
     };
 }
@@ -75,7 +76,7 @@ async function usageCounts(codes) {
         `SELECT code,
                 COUNT(*) FILTER (WHERE status = 'paid')::int AS paid_count,
                 COUNT(*) FILTER (WHERE status = 'paid' AND source = 'ghl' AND affiliate_email IS NULL)::int AS unassigned_count
-         FROM coupon_redemptions WHERE code = ANY($1::text[]) GROUP BY code`,
+         FROM coupon_redemptions WHERE code = ANY($1::text[]) AND is_test = false GROUP BY code`,
         [codes]
     );
     return new Map(rows.map((r) => [r.code, { paidCount: r.paid_count, unassignedCount: r.unassigned_count }]));

@@ -8,6 +8,10 @@
 // order carrying a coupon code is recorded: buyers are always tracked, and the affiliate
 // is credited (fee on subtotal - discount, pre-tax) only when the coupon has one. Codes
 // we have never seen are auto-created as general, GHL-origin, non-local coupons.
+// Paid TEST-mode coupon orders are recorded too (coupon_redemptions.is_test = true, same
+// commission math) so the affiliate flow can be verified without real money; they are never
+// counted as real money elsewhere. A test order with an unknown code creates no coupon and
+// no redemption (summary.skipped.testUnknownCoupon). Refunds apply to test rows like live ones.
 // PayMongo (LOCAL) sales are also mirrored into MAIN as invoices (see paymentController.js)
 // - those (sourceType 'invoice') must be skipped here or they'd be double-counted.
 const pool = require('../db/pool');
@@ -34,7 +38,7 @@ function emptyLocationSummary() {
         solutionsUpdated: 0,
         wouldRecordSolutions: 0,
         wouldCreateCoupons: [],
-        skipped: { noCoupon: 0, invoice: 0, test: 0 },
+        skipped: { noCoupon: 0, invoice: 0, testUnknownCoupon: 0 },
         errors: []
     };
 }
@@ -202,14 +206,18 @@ async function processPaidOrder(location, order, summary, getDetail, { dryRun })
         return;
     }
 
-    // markAsTest is only reliably present on the order detail, not the list item.
-    if (detail && isTestOrder(detail)) {
-        summary.skipped.test++;
-        return;
-    }
+    // markAsTest is only reliably present on the order detail, not the list item. Test-mode orders
+    // are recorded (flagged is_test, never real money) so the affiliate flow can be verified.
+    const isTest = isTestOrder(order) || isTestOrder(detail || {});
 
     let coupon = await couponStore.findCoupon(code);
-    if (!coupon) {
+    if (isTest) {
+        // A test order never creates or touches a coupon: an unknown code has nothing to credit.
+        if (!coupon) {
+            summary.skipped.testUnknownCoupon++;
+            return;
+        }
+    } else if (!coupon) {
         if (dryRun) {
             if (!summary.wouldCreateCoupons.includes(code)) summary.wouldCreateCoupons.push(code);
         } else {
@@ -250,7 +258,8 @@ async function processPaidOrder(location, order, summary, getDetail, { dryRun })
         currency: order.currency || detail?.currency || 'USD',
         createdAt: order.createdAt,
         ghlLocationId: order.altId || location.locationId,
-        ghlProductIds: extractItemProductIds(detail)
+        ghlProductIds: extractItemProductIds(detail),
+        isTest
     });
 
     if (inserted) {
@@ -280,11 +289,6 @@ async function processOrder(client, location, order, summary, opts) {
         summary.skipped.invoice++;
         return;
     }
-    if (isTestOrder(order)) {
-        summary.skipped.test++;
-        return;
-    }
-
     const paymentStatus = String(order.paymentStatus || '').toLowerCase();
 
     if (paymentStatus === 'paid') {

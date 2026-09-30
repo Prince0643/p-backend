@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
+import { formatMoney } from "@/lib/money";
 import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
 
@@ -48,6 +49,7 @@ type Redemption = {
   status: "pending" | "paid" | "released";
   createdAt: string;
   paidAt: string | null;
+  isTest?: boolean;
 };
 
 type SolutionTransaction = {
@@ -80,11 +82,7 @@ const emptyData: DashboardData = {
 const INITIAL_NOW_MS = Date.now();
 
 function money(value: number, currency = "PHP") {
-  return new Intl.NumberFormat("en-PH", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 0,
-  }).format(Number(value) || 0);
+  return formatMoney(value, currency);
 }
 
 /**
@@ -251,12 +249,14 @@ export default function AdminDashboardPage() {
 
   const stats = useMemo(() => {
     const period = getCommissionPeriod(new Date(nowMs));
-    const paid = data.redemptions.filter((r) => r.status === "paid");
+    // GHL test-mode redemptions (isTest) are listed separately and never counted in live figures.
+    const liveRedemptions = data.redemptions.filter((r) => !r.isTest);
+    const paid = liveRedemptions.filter((r) => r.status === "paid");
     const weeklyPaid = paid.filter((r) => {
       const paidMs = new Date(r.paidAt || r.createdAt).getTime();
       return paidMs >= period.periodStartMs && paidMs < period.periodEndMs;
     });
-    const pending = data.redemptions.filter((r) => r.status === "pending");
+    const pending = liveRedemptions.filter((r) => r.status === "pending");
     const activeAffiliates = data.affiliates.filter((a) => a.status === "active");
     const activeCoupons = data.coupons.filter((c) => c.active);
     // Local (PayMongo/PHP) and global (GHL/USD) redemptions now share this ledger, so
@@ -287,9 +287,12 @@ export default function AdminDashboardPage() {
     const period = getCommissionPeriod(new Date(nowMs));
     return data.affiliates
       .map((affiliate) => {
-        const redemptions = data.redemptions.filter(
+        const all = data.redemptions.filter(
           (r) => r.affiliateEmail === affiliate.email || r.code === affiliate.couponCode
         );
+        const redemptions = all.filter((r) => !r.isTest);
+        const testPaid = all.filter((r) => r.isTest && r.status === "paid");
+        const testCommission = sumByCurrency(testPaid, (r) => r.affiliateFeeAmount);
         const paid = redemptions.filter((r) => {
           const paidMs = new Date(r.paidAt || r.createdAt).getTime();
           return r.status === "paid" && paidMs >= period.periodStartMs && paidMs < period.periodEndMs;
@@ -302,6 +305,8 @@ export default function AdminDashboardPage() {
           paidRedemptions: paid.length,
           revenue,
           commission,
+          testSales: testPaid.length,
+          testCommission,
           // Sort-only heuristic: raw sum across currencies (never rendered) just to
           // order the table, since ranking still needs a single comparable number.
           commissionSortValue: Object.values(commission).reduce((sum, v) => sum + v, 0),
@@ -429,7 +434,15 @@ export default function AdminDashboardPage() {
                       </td>
                       <td className="p-3 text-right font-bold">{row.paidRedemptions}</td>
                       <td className="p-3 text-right">{formatByCurrency(row.revenue)}</td>
-                      <td className="p-3 text-right font-extrabold text-emerald-200">{formatByCurrency(row.commission)}</td>
+                      <td className="p-3 text-right font-extrabold text-emerald-200">
+                        {formatByCurrency(row.commission)}
+                        {row.testSales > 0 && (
+                          <div className="mt-1 text-xs font-bold text-fuchsia-200">
+                            <span className="mr-1 rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-1.5 py-0.5 text-[10px] uppercase">TEST</span>
+                            {row.testSales} test sale{row.testSales === 1 ? "" : "s"} · {formatByCurrency(row.testCommission)} test commission
+                          </div>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {affiliateRows.length === 0 && (
@@ -456,6 +469,11 @@ export default function AdminDashboardPage() {
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${statusClass(r.status)}`}>
                         {r.status}
                       </span>
+                      {r.isTest && (
+                        <span className="rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-2 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">
+                          TEST
+                        </span>
+                      )}
                     </div>
                     <div className="mt-1 text-sm text-slate-200">{r.fullName || r.email || "Unknown customer"}</div>
                     <div className="mt-1 text-xs text-slate-400">{r.productId || "Any product"} · {shortDate(r.paidAt || r.createdAt)}</div>

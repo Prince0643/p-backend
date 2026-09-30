@@ -54,9 +54,10 @@ type Redemption = {
   affiliatePaidAt: string | null;
   needsReview: boolean;
   refundedAt: string | null;
+  isTest?: boolean;
 };
 
-type Stats = { totalRedemptions: number; paidRedemptions: number; totalEarnings: number };
+type Stats = { totalRedemptions: number; paidRedemptions: number; totalEarnings: number; testRedemptions?: number };
 
 type CurrencyTotals = { sales: number; commission?: number; earned?: number; paidOut?: number; unpaid?: number };
 
@@ -77,6 +78,7 @@ export default function AffiliateDashboardPage() {
   const [redemptions, setRedemptions] = useState<Redemption[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [totalsByCurrency, setTotalsByCurrency] = useState<Record<string, CurrencyTotals> | null>(null);
+  const [testTotals, setTestTotals] = useState<Record<string, { sales: number; commission: number }> | null>(null);
   const [copied, setCopied] = useState(false);
 
   const [editingPayout, setEditingPayout] = useState(false);
@@ -92,12 +94,14 @@ export default function AffiliateDashboardPage() {
       redemptions: Redemption[];
       stats: Stats;
       totalsByCurrency?: Record<string, CurrencyTotals>;
+      testTotalsByCurrency?: Record<string, { sales: number; commission: number }>;
     }>("/api/affiliates/me", token);
     setAffiliate(data.affiliate);
     setCoupon(data.coupon);
     setRedemptions(data.redemptions);
     setStats(data.stats);
     setTotalsByCurrency(data.totalsByCurrency || null);
+    setTestTotals(data.testTotalsByCurrency || null);
     setRegion(data.affiliate.paymentRegion);
     setPhMethod(data.affiliate.paymentRegion === "PH" ? data.affiliate.preferredBank : "");
     setGlobalMethod(data.affiliate.paymentRegion === "GLOBAL" ? data.affiliate.preferredBank : "");
@@ -214,9 +218,23 @@ export default function AffiliateDashboardPage() {
         </div>
       ) : (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <StatCard label="Total Earnings" value={`₱${(stats?.totalEarnings ?? 0).toLocaleString()}`} accent />
+          <StatCard label="Total Earnings" value={money(stats?.totalEarnings ?? 0, "PHP")} accent />
           <StatCard label="Paid Redemptions" value={String(stats?.paidRedemptions ?? 0)} />
           <StatCard label="Total Redemptions" value={String(stats?.totalRedemptions ?? 0)} />
+        </div>
+      )}
+
+      {testTotals && Object.keys(testTotals).length > 0 && (
+        <div className="mb-6 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-400/5 p-4 text-sm text-fuchsia-100">
+          <div className="mb-1 text-xs font-bold uppercase tracking-wide">
+            <span className="mr-2 rounded-full border border-fuchsia-300/40 px-2 py-0.5 text-[10px]">TEST</span>
+            Test orders - not payable
+          </div>
+          {Object.entries(testTotals).map(([currency, t]) => (
+            <div key={currency}>
+              {money(t.sales, currency)} test sales · {money(t.commission, currency)} test commission (not included in your earnings)
+            </div>
+          ))}
         </div>
       )}
 
@@ -378,6 +396,9 @@ export default function AffiliateDashboardPage() {
                     <span className={`rounded-full border px-2 py-0.5 text-[10px] ${r.channel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
                       {r.channel === "global" ? "Global" : "Local"}
                     </span>
+                    {r.isTest && (
+                      <span className="ml-1 rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-2 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">TEST</span>
+                    )}
                   </td>
                   <td className="p-2">{r.paymentReference}</td>
                   <td className="p-2">{money(r.baseAmount, r.currency)}</td>
@@ -389,6 +410,8 @@ export default function AffiliateDashboardPage() {
                   <td className="p-2">
                     {r.refundedAt ? (
                       <span className="font-bold text-red-300">Refunded</span>
+                    ) : r.isTest ? (
+                      <span className="text-fuchsia-200">Test - not payable</span>
                     ) : r.affiliatePaidAt ? (
                       <span className="text-emerald-300">Paid {new Date(r.affiliatePaidAt).toLocaleDateString()}</span>
                     ) : r.needsReview ? (

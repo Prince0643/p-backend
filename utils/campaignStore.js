@@ -209,7 +209,7 @@ async function fetchCampaignStatsMap(campaignIds) {
             COALESCE(SUM(discount_amount) FILTER (WHERE status = 'paid'), 0) AS discount_total,
             COALESCE(SUM(affiliate_fee_amount) FILTER (WHERE status = 'paid'), 0) AS commission_total
          FROM coupon_redemptions
-         WHERE campaign_id = ANY($1::text[])
+         WHERE campaign_id = ANY($1::text[]) AND is_test = false
          GROUP BY campaign_id`,
         [campaignIds]
     );
@@ -242,7 +242,7 @@ async function fetchCampaignStatsByCurrencyMap(campaignIds) {
             COALESCE(SUM(discount_amount) FILTER (WHERE status = 'paid'), 0) AS discount_total,
             COALESCE(SUM(affiliate_fee_amount) FILTER (WHERE status = 'paid'), 0) AS commission_total
          FROM coupon_redemptions
-         WHERE campaign_id = ANY($1::text[])
+         WHERE campaign_id = ANY($1::text[]) AND is_test = false
          GROUP BY campaign_id, currency`,
         [campaignIds]
     );
@@ -285,7 +285,7 @@ async function fetchAffiliateStatsMap(campaignIds) {
                 COALESCE(SUM(discount_amount) FILTER (WHERE status = 'paid'), 0) AS discount_total,
                 COALESCE(SUM(affiliate_fee_amount) FILTER (WHERE status = 'paid'), 0) AS commission_total
          FROM coupon_redemptions
-         WHERE campaign_id = ANY($1::text[]) AND code = ANY($2::text[])
+         WHERE campaign_id = ANY($1::text[]) AND code = ANY($2::text[]) AND is_test = false
          GROUP BY campaign_id, code, currency`,
         [campaignIds, couponCodes]
     );
@@ -391,7 +391,7 @@ async function listActiveCampaignsForAffiliate(affiliate) {
                 COALESCE(SUM(discount_amount) FILTER (WHERE status = 'paid'), 0) AS discount_total,
                 COALESCE(SUM(affiliate_fee_amount) FILTER (WHERE status = 'paid'), 0) AS commission_total
          FROM coupon_redemptions
-         WHERE campaign_id = ANY($1::text[]) AND code = $2
+         WHERE campaign_id = ANY($1::text[]) AND code = $2 AND is_test = false
          GROUP BY campaign_id, currency`,
         [campaignIds, affiliate.couponCode]
     );

@@ -45,6 +45,7 @@ type Redemption = {
   affiliatePaidAt: string | null;
   needsReview: boolean;
   refundedAt: string | null;
+  isTest?: boolean;
 };
 
 type ImportOrdersSummary = {
@@ -52,7 +53,7 @@ type ImportOrdersSummary = {
   imported: number;
   refunded: number;
   flagged: number;
-  skipped: { noCoupon: number; invoice: number; unknownCode: number; noAffiliate: number; test: number };
+  skipped: { noCoupon: number; invoice: number; unknownCode: number; noAffiliate: number; testUnknownCoupon?: number };
   errors: unknown[];
 };
 
@@ -437,7 +438,7 @@ export default function CouponsPage() {
   // Payout can only be marked for redemptions whose CUSTOMER payment already
   // cleared (status 'paid') and that haven't been paid out to the affiliate yet.
   function canSelectForPayout(r: Redemption) {
-    return r.status === "paid" && !r.affiliatePaidAt;
+    return r.status === "paid" && !r.affiliatePaidAt && !r.isTest;
   }
 
   function toggleRedemption(id: string) {
@@ -887,6 +888,9 @@ export default function CouponsPage() {
                         <span className={`rounded-full border px-2 py-0.5 text-[10px] ${r.channel === "global" ? "border-cyan-400/40 text-cyan-200" : "border-blue-400/40 text-blue-200"}`}>
                           {r.channel === "global" ? "Global" : "Local"}
                         </span>
+                        {r.isTest && (
+                          <span className="ml-1 rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-2 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">TEST</span>
+                        )}
                       </td>
                       <td className="p-2">{r.code}</td>
                       <td className="p-2">{r.paymentReference}</td>
@@ -902,6 +906,8 @@ export default function CouponsPage() {
                       <td className="p-2">
                         {r.refundedAt ? (
                           <span className="font-bold text-red-300">Refunded</span>
+                        ) : r.isTest ? (
+                          <span className="text-fuchsia-200">Not payable (test)</span>
                         ) : r.affiliatePaidAt ? (
                           <span className="text-emerald-300">Paid out {new Date(r.affiliatePaidAt).toLocaleDateString()}</span>
                         ) : r.needsReview ? (

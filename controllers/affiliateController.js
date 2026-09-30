@@ -82,13 +82,18 @@ exports.list = async (req, res) => {
             affiliateStore.listAffiliates(),
             couponStore.listPaidAffiliateRedemptions()
         ]);
-        // totalsByCurrency: { PHP: { sales, commission, earned, paidOut, unpaid }, USD: {...} }
-        const withTotals = affiliates.map((affiliate) => ({
-            ...affiliate,
-            totalsByCurrency: couponStore.affiliateTotalsByCurrency(paid.filter((r) =>
+        // totalsByCurrency: { PHP: { sales, commission, earned, paidOut, unpaid }, USD: {...} } - LIVE rows only.
+        // testTotalsByCurrency: { USD: { sales, commission } } - GHL test-mode rows, shown separately, never payable.
+        const withTotals = affiliates.map((affiliate) => {
+            const mine = paid.filter((r) =>
                 String(r.affiliateEmail).toLowerCase() === affiliate.email.toLowerCase()
-                || (affiliate.couponCode && r.code === affiliate.couponCode)))
-        }));
+                || (affiliate.couponCode && r.code === affiliate.couponCode));
+            return {
+                ...affiliate,
+                totalsByCurrency: couponStore.affiliateTotalsByCurrency(mine),
+                testTotalsByCurrency: couponStore.testTotalsByCurrency(mine)
+            };
+        });
         res.json({ success: true, affiliates: withTotals });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list affiliates' });
@@ -103,7 +108,14 @@ exports.getOne = async (req, res) => {
 
         const coupon = affiliate.couponCode ? await couponStore.findCoupon(affiliate.couponCode) : null;
         const redemptions = await couponStore.listRedemptionsForAffiliate({ email: affiliate.email, couponCode: affiliate.couponCode });
-        res.json({ success: true, affiliate, coupon, totalsByCurrency: couponStore.affiliateTotalsByCurrency(redemptions) });
+        res.json({
+            success: true,
+            affiliate,
+            coupon,
+            redemptions,
+            totalsByCurrency: couponStore.affiliateTotalsByCurrency(redemptions),
+            testTotalsByCurrency: couponStore.testTotalsByCurrency(redemptions)
+        });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to get affiliate' });
     }

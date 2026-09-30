@@ -281,3 +281,8 @@ ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS commission_base NUMERIC(
 ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS ghl_order_id TEXT;
 UPDATE coupon_redemptions SET ghl_order_id = substring(payment_reference from 5)
 WHERE source = 'ghl' AND ghl_order_id IS NULL AND payment_reference LIKE 'ghl:%';
+
+-- GHL test-mode (liveMode:false / markAsTest) coupon orders are recorded as redemptions too, so the
+-- whole affiliate flow can be verified without real money. is_test rows are NEVER counted in
+-- totals, payouts, usage limits or holds - they are only listed (with a TEST badge).
+ALTER TABLE coupon_redemptions ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;

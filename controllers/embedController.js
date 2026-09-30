@@ -121,6 +121,9 @@ exports.checkout = async (req, res) => {
             notes: str(body.notes, 2000),
             campaign: str(body.campaign, 100),
             attributionRef: str(body.attributionRef, 50),
+            // Admin-issued, short-lived TEST-mode token (see utils/testMode.js). Forwarded as-is:
+            // createPaymentIntent verifies it (403 if invalid/expired); without one the checkout is live.
+            testToken: str(body.testToken, 2000),
             referredBy: str(body.referredBy, 200),
             source: product.defaults.source,
             paymentMethod: product.defaults.paymentMethod

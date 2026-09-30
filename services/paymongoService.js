@@ -1,13 +1,30 @@
 // services/paymongoService.js
 const axios = require('axios');
 
+// Thrown when a TEST-mode client is requested but the PAYMONGO_TEST_* env vars are missing
+// (or the configured "test" secret is not actually a test key). Test mode NEVER falls back
+// to the live keys - callers surface this as a 503.
+class TestModeUnavailableError extends Error {
+    constructor(message) {
+        super(message || 'PayMongo test mode is not configured on this server');
+        this.name = 'TestModeUnavailableError';
+        this.code = 'TEST_MODE_UNAVAILABLE';
+        this.status = 503;
+    }
+}
+
 class PayMongoService {
-    constructor() {
+    // `mode` is 'live' (default, PAYMONGO_SECRET_KEY / PAYMONGO_PUBLIC_KEY) or 'test'
+    // (PAYMONGO_TEST_SECRET_KEY / PAYMONGO_TEST_PUBLIC_KEY). Obtain a mode-specific client
+    // with paymongoService.forMode('test' | 'live') rather than constructing directly.
+    constructor(mode = 'live', { secretKey, publicKey } = {}) {
+        this.mode = mode;
         this.baseURL = 'https://api.paymongo.com/v1';
-        this.secretKey = process.env.PAYMONGO_SECRET_KEY;
+        this.secretKey = secretKey !== undefined ? secretKey : process.env.PAYMONGO_SECRET_KEY;
+        this.publicKey = publicKey !== undefined ? publicKey : process.env.PAYMONGO_PUBLIC_KEY;
 
         // Debug: Check if secret key is loaded (masked for security)
-        console.log('PayMongo Secret Key loaded:', this.secretKey ? '✅ Yes (starts with ' + this.secretKey.substring(0, 8) + '...)' : '❌ No');
+        console.log(`PayMongo ${mode === 'test' ? 'TEST ' : ''}Secret Key loaded:`, this.secretKey ? '✅ Yes (starts with ' + this.secretKey.substring(0, 8) + '...)' : '❌ No');
 
         this.client = axios.create({
             baseURL: this.baseURL,
@@ -16,6 +33,15 @@ class PayMongoService {
                 'Content-Type': 'application/json'
             }
         });
+    }
+
+    get isTest() {
+        return this.mode === 'test';
+    }
+
+    // Returns the client for 'live' (the default instance, exactly as before) or 'test'.
+    forMode(mode = 'live') {
+        return forMode(mode);
     }
 
     // Helper function to format currency for PayMongo
@@ -420,4 +446,31 @@ class PayMongoService {
     }
 }
 
-module.exports = new PayMongoService();
+const liveService = new PayMongoService('live');
+
+// Test client is built lazily from PAYMONGO_TEST_* on every request for it (cached while the
+// key is unchanged), so a missing var is always an error - never a fallback to the live keys.
+let testService = null;
+
+function forMode(mode = 'live') {
+    if (mode === undefined || mode === null || mode === 'live') return liveService;
+    if (mode !== 'test') throw new Error(`Unknown PayMongo mode: ${mode}`);
+
+    const secretKey = process.env.PAYMONGO_TEST_SECRET_KEY;
+    const publicKey = process.env.PAYMONGO_TEST_PUBLIC_KEY;
+    if (!secretKey || !publicKey) {
+        throw new TestModeUnavailableError('PayMongo test mode is not configured (PAYMONGO_TEST_SECRET_KEY / PAYMONGO_TEST_PUBLIC_KEY missing)');
+    }
+    // Belt and braces: a live key pasted into the test var must never be used for a "test" checkout.
+    if (!String(secretKey).startsWith('sk_test_')) {
+        throw new TestModeUnavailableError('PAYMONGO_TEST_SECRET_KEY is not a PayMongo test key (expected sk_test_...)');
+    }
+    if (!testService || testService.secretKey !== secretKey || testService.publicKey !== publicKey) {
+        testService = new PayMongoService('test', { secretKey, publicKey });
+    }
+    return testService;
+}
+
+module.exports = liveService;
+module.exports.forMode = forMode;
+module.exports.TestModeUnavailableError = TestModeUnavailableError;

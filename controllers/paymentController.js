@@ -11,6 +11,7 @@ const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleSto
 const couponStore = require('../utils/couponStore');
 const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 const ghlStudentUsers = require('../services/ghlStudentUsers');
+const { resolveCheckoutMode, respondModeError, testPayloadFlags } = require('../utils/testMode');
 
 async function resolveCatalogProduct({ productId, productName }) {
     const byId = productId ? await findProduct({ productId }) : null;
@@ -30,6 +31,17 @@ exports.createPaymentIntent = async (req, res) => {
     let reservedPaymentReference = null;
 
     try {
+        // Live unless the request carries a valid admin-issued test token (403 if present but
+        // invalid/expired, 503 if test mode isn't configured - never a silent fallback to live).
+        let checkoutMode;
+        try {
+            checkoutMode = await resolveCheckoutMode(req);
+        } catch (modeErr) {
+            if (respondModeError(res, modeErr)) return;
+            throw modeErr;
+        }
+        const { isTest, paymongo } = checkoutMode;
+
         // ✅ FIXED: Added paymentMethod and source to destructuring
         const {
             fullName,
@@ -119,7 +131,8 @@ exports.createPaymentIntent = async (req, res) => {
             const reservation = await couponStore.beginCouponReservation({
                 code: effectivePromoCode,
                 productId: catalogProduct.id,
-                email
+                email,
+                isTest
             });
             if (!reservation.coupon) {
                 if (isExplicitlyTypedPromoCode) {
@@ -165,7 +178,8 @@ exports.createPaymentIntent = async (req, res) => {
                 commissionBase,
                 affiliateFeeAmount,
                 affiliateEmail: appliedCoupon.affiliateEmail || referredBy || '',
-                currency: productInfo.currency
+                currency: productInfo.currency,
+                isTest
             });
             // finalizeCouponReservation already committed + released the client above.
             // Track the reference so the catch block can release the hold if anything
@@ -258,7 +272,7 @@ exports.createPaymentIntent = async (req, res) => {
 
         const paymentMethods = await getCheckoutMethodTypes({
             paymentMethod: selectedPaymentMethod,
-            paymongoService,
+            paymongoService: paymongo,
             enableCapabilityFilter
         });
 
@@ -293,7 +307,7 @@ exports.createPaymentIntent = async (req, res) => {
             // Normalize UBP capability to DOB for PaymentIntent allowlist.
             .map((m) => (m === 'dob_ubp' ? 'dob' : m));
 
-        const paymentIntent = await paymongoService.createPaymentIntent({
+        const paymentIntent = await paymongo.createPaymentIntent({
             amount: finalAmount,
             currency: productInfo.currency,
             description: `${normalizedProduct} - ${fullName}${appliedCoupon ? ` (Promo: ${appliedCoupon.code})` : ''}`,
@@ -318,7 +332,9 @@ exports.createPaymentIntent = async (req, res) => {
             currency: productInfo.currency,
             promoCode: appliedCoupon?.code,
             source,
-            status: 'initiated'
+            status: 'initiated',
+            isTest,
+            paymongoPaymentIntentId: paymentIntent.id
         });
 
         // Send to LeadConnector webhook - include paymentMethod and source
@@ -348,7 +364,8 @@ exports.createPaymentIntent = async (req, res) => {
             status: 'payment_initiated',
             paymentIntentId: paymentIntent.id,
             checkoutUrl: paymentIntent.attributes.checkout_url,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            ...testPayloadFlags(isTest)
         }).catch(err => console.log('LeadConnector webhook error:', err.message));
 
         // Return payment details to frontend
@@ -364,7 +381,10 @@ exports.createPaymentIntent = async (req, res) => {
             taxAmount: taxAmount,
             discountAmount: serverDiscountAmount,
             promoCode: appliedCoupon?.code || '',
-            currency: productInfo.currency
+            currency: productInfo.currency,
+            // Test checkouts are flagged so the caller can show its TEST MODE banner; live
+            // responses are unchanged.
+            ...(isTest ? { testMode: true } : {})
         });
 
     } catch (error) {
@@ -384,7 +404,14 @@ exports.createPaymentIntent = async (req, res) => {
 // Diagnostic: Expose PayMongo merchant method capabilities (sanitized)
 exports.getPaymongoCapabilities = async (req, res) => {
     try {
-        const capabilities = await paymongoService.getMerchantPaymentMethodCapabilities();
+        let paymongo;
+        try {
+            ({ paymongo } = await resolveCheckoutMode(req));
+        } catch (modeErr) {
+            if (respondModeError(res, modeErr)) return;
+            throw modeErr;
+        }
+        const capabilities = await paymongo.getMerchantPaymentMethodCapabilities();
 
         const sanitized = (capabilities || []).map((pm) => {
             // PayMongo typically returns JSON:API resources, but be defensive and expose safe structure hints.
@@ -436,6 +463,13 @@ exports.getPaymongoCapabilities = async (req, res) => {
     }
 };
 
+// The PayMongo client for an existing payment intent: the mode persisted on its
+// digital_solutions_transactions row (unknown intents are live, as before).
+async function paymongoForStoredIntent(paymentIntentId) {
+    const tx = await digitalSolutionsStore.findByPaymongoPaymentIntentId(paymentIntentId);
+    return paymongoService.forMode(tx && tx.isTest ? 'test' : 'live');
+}
+
 // Get payment statuses
 exports.getPaymentStatus = async (req, res) => {
     try {
@@ -445,17 +479,23 @@ exports.getPaymentStatus = async (req, res) => {
             return res.status(400).json({ error: 'Payment ID required' });
         }
 
-        const paymentStatus = await paymongoService.getPaymentIntent(paymentId);
+        // Always use the mode stored when the checkout was created - never the caller's say-so.
+        const paymongo = await paymongoForStoredIntent(paymentId);
+        const paymentStatus = await paymongo.getPaymentIntent(paymentId);
 
         res.status(200).json({
             success: true,
             status: paymentStatus.attributes.status,
             paid: paymentStatus.attributes.status === 'succeeded',
-            paymentIntent: paymentStatus
+            paymentIntent: paymentStatus,
+            ...(paymongo.isTest ? { testMode: true } : {})
         });
 
     } catch (error) {
         console.error('Payment status check error:', error);
+        if (error.code === 'TEST_MODE_UNAVAILABLE') {
+            return res.status(503).json({ error: error.message });
+        }
         res.status(500).json({
             error: 'Failed to get payment status',
             message: error.message
@@ -479,18 +519,22 @@ exports.handleWebhook = async (req, res) => {
         console.log('Webhook received:', eventType);
         console.log('Event data:', JSON.stringify(event.data, null, 2));
 
+        // PayMongo mode of this event: the signature middleware has already proven the
+        // signature mode matches the payload's livemode (dev fallback without secrets: payload only).
+        const isTestEvent = (req.paymongoWebhookMode || (eventLivemode(event) === false ? 'test' : 'live')) === 'test';
+
         // Handle different event types
         switch (eventType) {
             case 'payment.paid':
-                await handlePaymentSuccess(event.data?.attributes || event.data);
+                await handlePaymentSuccess(event.data?.attributes || event.data, { isTestEvent });
                 break;
 
             case 'payment.failed':
-                await handlePaymentFailure(event.data?.attributes || event.data);
+                await handlePaymentFailure(event.data?.attributes || event.data, { isTestEvent });
                 break;
 
             case 'payment.pending':
-                await handlePaymentPending(event.data?.attributes || event.data);
+                await handlePaymentPending(event.data?.attributes || event.data, { isTestEvent });
                 break;
 
             default:
@@ -538,7 +582,8 @@ exports.retryPayment = async (req, res) => {
             return res.status(400).json({ error: 'Payment ID required' });
         }
 
-        const paymentIntent = await paymongoService.getPaymentIntent(paymentId);
+        const paymongo = await paymongoForStoredIntent(paymentId);
+        const paymentIntent = await paymongo.getPaymentIntent(paymentId);
 
         res.status(200).json({
             success: true,
@@ -548,6 +593,9 @@ exports.retryPayment = async (req, res) => {
 
     } catch (error) {
         console.error('Payment retry error:', error);
+        if (error.code === 'TEST_MODE_UNAVAILABLE') {
+            return res.status(503).json({ error: error.message });
+        }
         res.status(500).json({ error: 'Failed to retry payment' });
     }
 };
@@ -565,13 +613,23 @@ exports.getPaymentMethods = async (req, res) => {
         { id: 'card', name: 'Credit/Debit Card', icon: 'card-icon.png', category: 'card' }
     ];
 
+    let paymongo;
+    try {
+        ({ paymongo } = await resolveCheckoutMode(req));
+    } catch (modeErr) {
+        if (respondModeError(res, modeErr)) return;
+        return res.status(500).json({ error: 'Failed to resolve payment mode' });
+    }
+    // Test-mode callers also get the test public key (same mode as the checkout they will create).
+    const modeInfo = paymongo.isTest ? { mode: 'test', publicKey: paymongo.publicKey } : {};
+
     const enableCapabilityFilter = String(process.env.PAYMONGO_FILTER_METHOD_TYPES || '').toLowerCase() === 'true';
     if (!enableCapabilityFilter) {
-        return res.status(200).json({ methods });
+        return res.status(200).json({ methods, ...modeInfo });
     }
 
     try {
-        const capabilities = await paymongoService.getMerchantPaymentMethodCapabilities();
+        const capabilities = await paymongo.getMerchantPaymentMethodCapabilities();
         const allowed = new Set(
             (capabilities || [])
                 .map((pm) => {
@@ -598,11 +656,12 @@ exports.getPaymentMethods = async (req, res) => {
         });
 
         return res.status(200).json({
-            methods: filtered.length > 0 ? filtered : [{ id: 'qrph', name: 'QRPh (All Methods)', icon: 'qrph-icon.png', category: 'qr' }]
+            methods: filtered.length > 0 ? filtered : [{ id: 'qrph', name: 'QRPh (All Methods)', icon: 'qrph-icon.png', category: 'qr' }],
+            ...modeInfo
         });
     } catch (err) {
         console.log('Non-fatal: unable to fetch PayMongo capabilities for /methods, returning full list:', err.message);
-        return res.status(200).json({ methods });
+        return res.status(200).json({ methods, ...modeInfo });
     }
 };
 
@@ -635,7 +694,39 @@ exports.validatePayment = (req, res) => {
 };
 
 // Helper functions for webhook handling
-async function handlePaymentSuccess(attributes) {
+
+/** The event's `livemode` (true/false) from the webhook payload, or undefined if absent. */
+function eventLivemode(event) {
+    const value = event?.data?.attributes?.livemode;
+    if (typeof value === 'boolean') return value;
+    const nested = event?.data?.attributes?.data?.attributes?.livemode;
+    return typeof nested === 'boolean' ? nested : undefined;
+}
+
+/**
+ * A test event may only touch records created in test mode, and a live event only live records.
+ * The mode stored on the checkout's digital_solutions_transactions row is the source of truth.
+ * A live event with no matching row proceeds (records that predate the tracker); a test event
+ * with no matching row is ignored. Returns true when the event must be skipped.
+ */
+async function eventModeMismatch({ metadata, isClockistry, isTestEvent }) {
+    const reference = isClockistry ? metadata.internal_transaction_id : metadata.paymentReference;
+    const record = reference ? await digitalSolutionsStore.findByTransactionId(reference) : null;
+    if (record) {
+        if (record.isTest !== isTestEvent) {
+            console.warn(`Ignoring ${isTestEvent ? 'TEST' : 'LIVE'} webhook event for ${record.isTest ? 'TEST' : 'LIVE'} record ${reference}`);
+            return true;
+        }
+        return false;
+    }
+    if (isTestEvent) {
+        console.warn(`Ignoring TEST webhook event: no test-mode record for reference ${reference || '(none)'}`);
+        return true;
+    }
+    return false;
+}
+
+async function handlePaymentSuccess(attributes, { isTestEvent = false } = {}) {
     console.log('Payment succeeded:', attributes);
 
     const paymentData = attributes.data || {};
@@ -644,10 +735,12 @@ async function handlePaymentSuccess(attributes) {
     // Check if this is a Clockistry payment - skip GHL for Clockistry
     const isClockistry = metadata.source === 'clockistry';
 
+    if (await eventModeMismatch({ metadata, isClockistry, isTestEvent })) return;
+
     if (isClockistry) {
-        await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'paid');
+        await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'paid', { isTest: isTestEvent });
     } else {
-        await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'paid');
+        await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'paid', { isTest: isTestEvent });
     }
 
     // Forward to Clockistry if applicable
@@ -672,7 +765,7 @@ async function handlePaymentSuccess(attributes) {
     // finds the row already 'paid' and markReservationPaid is a no-op.
     if (metadata.promoCode) {
         try {
-            const confirmed = await couponStore.markReservationPaid({ paymentReference: metadata.paymentReference });
+            const confirmed = await couponStore.markReservationPaid({ paymentReference: metadata.paymentReference, isTest: isTestEvent });
             if (confirmed) {
                 console.log('Coupon reservation confirmed paid:', confirmed.code, 'affiliateFee:', confirmed.affiliateFeeAmount);
             } else {
@@ -701,7 +794,8 @@ async function handlePaymentSuccess(attributes) {
                             commissionBase: redemptionBaseAmount,
                             affiliateFeeAmount,
                             affiliateEmail: coupon.affiliateEmail || metadata.referredBy || '',
-                            currency: paymentData.attributes?.currency || 'PHP'
+                            currency: paymentData.attributes?.currency || 'PHP',
+                            isTest: isTestEvent
                         });
                         console.log('Coupon redemption recorded directly (no prior reservation found):', coupon.code, 'affiliateFee:', affiliateFeeAmount);
                     } else {
@@ -714,8 +808,12 @@ async function handlePaymentSuccess(attributes) {
         }
     }
 
+    // Test payments never touch the MAIN GHL location: no contact upsert, no invoice, no
+    // invoice schedule (those would be real GHL records for fake money).
     try {
-        if (process.env.GHL_PRIVATE_KEY && process.env.GHL_LOCATION_ID) {
+        if (isTestEvent) {
+            console.log('PayMongo TEST payment - skipping GHL contact upsert and invoice mirroring');
+        } else if (process.env.GHL_PRIVATE_KEY && process.env.GHL_LOCATION_ID) {
             const amountCentavos = Number(paymentData.attributes?.amount);
             const currency = paymentData.attributes?.currency || 'PHP';
             // Convert centavos to whole currency units with decimals preserved (e.g., 165000 -> 1650.00)
@@ -892,7 +990,8 @@ async function handlePaymentSuccess(attributes) {
             paymentReference: metadata.paymentReference || paymentData.id,
             email: metadata.email,
             fullName: metadata.fullName,
-            productId: metadata.productId
+            productId: metadata.productId,
+            isTest: isTestEvent
         });
     } catch (err) {
         console.log('GHL student account error (non-fatal):', err.message);
@@ -904,13 +1003,14 @@ async function handlePaymentSuccess(attributes) {
         paymentId: paymentData.id,
         paymentDetails: attributes,
         ...(ghlStudentAccount ? { ghlStudentAccount } : {}),
+        ...testPayloadFlags(isTestEvent),
         completedAt: new Date().toISOString()
     }).catch(err => {
         console.log('LeadConnector webhook error (non-fatal):', err.response?.data || err.message);
     });
 }
 
-async function handlePaymentFailure(attributes) {
+async function handlePaymentFailure(attributes, { isTestEvent = false } = {}) {
     console.log('Payment failed:', attributes);
 
     const paymentData = attributes.data || {};
@@ -919,16 +1019,18 @@ async function handlePaymentFailure(attributes) {
     // Check if this is a Clockistry payment
     const isClockistry = metadata.source === 'clockistry';
 
+    if (await eventModeMismatch({ metadata, isClockistry, isTestEvent })) return;
+
     if (isClockistry) {
-        await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'failed');
+        await digitalSolutionsStore.updateTransactionStatus(metadata.internal_transaction_id, 'failed', { isTest: isTestEvent });
     } else {
-        await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'failed');
+        await digitalSolutionsStore.updateTransactionStatus(metadata.paymentReference, 'failed', { isTest: isTestEvent });
     }
 
     // Release any coupon hold reserved at checkout creation for this payment, so a
     // failed one-time coupon attempt doesn't block the coupon forever.
     if (metadata.promoCode && metadata.paymentReference) {
-        await couponStore.releaseReservation(metadata.paymentReference).catch((err) => {
+        await couponStore.releaseReservation(metadata.paymentReference, { isTest: isTestEvent }).catch((err) => {
             console.log('Coupon reservation release error (non-fatal):', err.message);
         });
     }
@@ -950,12 +1052,13 @@ async function handlePaymentFailure(attributes) {
         status: 'payment_failed',
         paymentId: paymentData.id,
         paymentDetails: attributes,
+        ...testPayloadFlags(isTestEvent),
         completedAt: new Date().toISOString()
     }).catch(err => {
         console.log('LeadConnector webhook error (non-fatal):', err.response?.data || err.message);
     });
 }
 
-async function handlePaymentPending(attributes) {
+async function handlePaymentPending(attributes, { isTestEvent = false } = {}) {
     console.log('Payment pending:', attributes);
 }

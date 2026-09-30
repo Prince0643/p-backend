@@ -139,6 +139,7 @@ if (hasExportedWebApp) {
         '/admin/campaign-sites',
         '/admin/affiliates',
         '/admin/solutions',
+        '/admin/test-checkout',
         '/affiliate/login',
         '/affiliate/dashboard'
     ];

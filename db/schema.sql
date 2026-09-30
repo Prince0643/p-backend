@@ -308,3 +308,12 @@ ALTER TABLE ghl_student_users DROP CONSTRAINT IF EXISTS ghl_student_users_status
 ALTER TABLE ghl_student_users ADD CONSTRAINT ghl_student_users_status_check CHECK (status IN ('pending', 'created', 'existing', 'failed'));
 CREATE INDEX IF NOT EXISTS idx_ghl_student_users_status ON ghl_student_users(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_ghl_student_users_email_lower ON ghl_student_users (lower(email));
+
+-- Per-checkout PayMongo TEST mode: an admin can run a single checkout with the PayMongo test keys
+-- (the site itself stays live). The checkout's mode is persisted so status polling, webhooks and
+-- retries use the right key, and test rows never count toward revenue/limits/payouts.
+-- digital_solutions_transactions.is_test and coupon_redemptions.is_test already exist above; the
+-- PayMongo payment intent id lets GET /api/payments/status/:id find the stored mode.
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS paymongo_payment_intent_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_dst_paymongo_payment_intent_id ON digital_solutions_transactions(paymongo_payment_intent_id);
+ALTER TABLE ghl_student_users ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;

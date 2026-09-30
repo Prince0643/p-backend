@@ -212,6 +212,10 @@ function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalso
   async function createPaymentIntent({ fullName, email, mobile, notes, amountOverride, discountAmount, promoCode, referredBy, description }) {
     const amountToCharge = (typeof amountOverride === 'number' && amountOverride > 0) ? amountOverride : SUBTOTAL_WITH_TAX;
 
+    // Admin test mode: open this page with ?nx_test=<token> (Admin > Products > Test checkout) to run
+    // the checkout in PayMongo test mode. Never bake a token into the page itself.
+    const nxTestToken = new URLSearchParams(window.location.search).get('nx_test');
+
     const res = await fetch(\`\${BACKEND_URL}/api/payments/create-payment-intent\`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -232,6 +236,7 @@ function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalso
         discountAmount: discountAmount || 0,
         promoCode: promoCode || '',
         referredBy: referredBy || '',
+        ...(nxTestToken ? { testToken: nxTestToken } : {}),
         description: description || \`\${PRODUCT_NAME} - Base: ₱\${BASE_AMOUNT} + Tax (\${(TAX_RATE * 100).toFixed(0)}%): ₱\${TAX_AMOUNT.toFixed(2)} = ₱\${amountToCharge.toFixed(2)}\${DISPLAY_SUFFIX}\`
       })
     });

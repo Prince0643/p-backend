@@ -11,6 +11,14 @@
  *   data-button-text="Pay now"  button label
  *   data-radius="10"          corner radius in px (clamped 0-32)
  *   data-api-base="https://..."  override API origin (default: origin of this script's src)
+ *   data-nx-test="<token>"    ADMIN TEST MODE (set by the admin "Test checkout" preview page only -
+ *                             never paste it into a public snippet). The form shows a "TEST MODE -
+ *                             no real charge" banner and sends the token as `testToken` so the
+ *                             checkout runs in PayMongo test mode (use PayMongo test cards).
+ *
+ * Admin test mode on a real funnel page: append ?nx_test=<token> to the page URL (the token comes
+ * from Admin > Products > Test checkout, is signed, and expires after ~2 hours). It is read from the
+ * URL each time and is never stored in a cookie or localStorage.
  *
  * The form renders inside an open Shadow DOM so host-page CSS cannot break it.
  * Affiliate attribution (?ref= / ?campaign=) uses the same cookie + localStorage
@@ -102,6 +110,25 @@
       return fromUrl;
     }
     return readCookie() || readLocal() || { ref: null, campaign: null };
+  }
+
+  // ---- admin test mode ------------------------------------------------------
+  var TEST_TOKEN_PATTERN = /^[A-Za-z0-9_.-]{20,2000}$/;
+
+  function sanitizeTestToken(v) { v = v == null ? '' : String(v).trim(); return TEST_TOKEN_PATTERN.test(v) ? v : null; }
+
+  function readTestQuery(search) {
+    try { return sanitizeTestToken(new URLSearchParams(search || '').get('nx_test')); } catch (e) { return null; }
+  }
+
+  // data-nx-test attribute > ?nx_test= on this window > ?nx_test= on the (same-origin) top window.
+  function resolveTestToken(el) {
+    var token = sanitizeTestToken(el.getAttribute('data-nx-test'));
+    if (!token) token = readTestQuery(window.location.search);
+    if (!token) {
+      try { if (window.top !== window) token = readTestQuery(window.top.location.search); } catch (e) { /* cross-origin */ }
+    }
+    return token;
   }
 
   // ---- API base -------------------------------------------------------------
@@ -270,6 +297,8 @@
       '@keyframes s{to{transform:rotate(360deg)}}',
       '.errbox{margin:0 0 14px;padding:12px 14px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:' + radius + 'px;font-size:14px}',
       '.errbox:empty{display:none}',
+      '.testbanner{margin:0 0 16px;padding:12px 14px;background:#fef3c7;border:2px solid #b45309;border-radius:' + radius + 'px;color:#78350f;font-size:13px}',
+      '.testbanner strong{display:block;font-size:15px;letter-spacing:.02em;color:#7c2d12}',
       '.foot{margin:14px 0 0;text-align:center;font-size:12px;color:#4b5563}',
       '.sk{border-radius:6px;background:linear-gradient(90deg,#f3f4f6 25%,#e5e7eb 37%,#f3f4f6 63%);background-size:400% 100%;animation:sh 1.4s ease infinite}',
       '@keyframes sh{0%{background-position:100% 50%}100%{background-position:0 50%}}',
@@ -291,6 +320,7 @@
     var base = originOf(el.getAttribute('data-api-base') || '') || SCRIPT_ORIGIN || 'https://api.nexistrydigitalsolutions.com';
 
     var attribution = resolveAttribution();
+    var testToken = resolveTestToken(el);
     var root = el.attachShadow ? el.attachShadow({ mode: 'open' }) : null;
     if (!root) { console.warn('[nx-embed] Shadow DOM unsupported'); return; }
     root.appendChild(h('style', { text: buildCss(accent, radius) }));
@@ -493,6 +523,7 @@
       if (notes) body.notes = notes;
       if (attribution.campaign) body.campaign = attribution.campaign;
       if (attribution.ref) body.attributionRef = attribution.ref;
+      if (testToken) body.testToken = testToken;
 
       clearTimeout(state.timer);
       setSubmitting(true);
@@ -519,6 +550,12 @@
       var form = h('form', { novalidate: 'novalidate', 'aria-labelledby': uid + '-title' });
       form.addEventListener('submit', submit);
 
+      if (testToken) {
+        card.appendChild(h('div', { 'class': 'testbanner', role: 'status' }, [
+          h('strong', { text: 'TEST MODE \u2014 no real charge' }),
+          h('span', { text: 'This checkout uses PayMongo test mode. Pay with a PayMongo test card or test e-wallet only.' })
+        ]));
+      }
       card.appendChild(h('h2', { id: uid + '-title', text: p.name || 'Checkout' }));
       card.appendChild(h('p', { 'class': 'sub', text: 'Enter your details to continue to secure payment.' }));
 
@@ -544,7 +581,7 @@
       refs.button = h('button', { type: 'submit', 'class': 'pay' }, [h('span', { text: buttonText })]);
       form.appendChild(refs.button);
       card.appendChild(form);
-      card.appendChild(h('p', { 'class': 'foot', text: 'Secure payment via PayMongo' }));
+      card.appendChild(h('p', { 'class': 'foot', text: testToken ? 'PayMongo TEST MODE \u2014 no real charge' : 'Secure payment via PayMongo' }));
 
       // Prefill promo with the affiliate ref, like nx-ref.js does for an empty field.
       if (attribution.ref) refs.promo.value = attribution.ref;

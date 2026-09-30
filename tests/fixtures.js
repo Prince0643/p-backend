@@ -65,18 +65,22 @@ async function cleanupAffiliate(email) {
     }
 }
 
-function signWebhookBody(bodyObj, { secret = process.env.PAYMONGO_WEBHOOK_SECRET, timestamp = Math.floor(Date.now() / 1000) } = {}) {
+// PayMongo header format: live events populate `li` (te empty); test events populate `te` (li empty).
+// `mode` picks which slot is populated and (unless `secret` is given) which webhook secret signs it.
+function signWebhookBody(bodyObj, { mode = 'live', secret, timestamp = Math.floor(Date.now() / 1000) } = {}) {
+    const signingSecret = secret || (mode === 'test' ? process.env.PAYMONGO_TEST_WEBHOOK_SECRET : process.env.PAYMONGO_WEBHOOK_SECRET);
     const body = JSON.stringify(bodyObj);
     const signedPayload = `${timestamp}.${body}`;
-    const signature = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
-    return { body, header: `t=${timestamp},te=${signature}` };
+    const signature = crypto.createHmac('sha256', signingSecret).update(signedPayload).digest('hex');
+    return { body, header: mode === 'test' ? `t=${timestamp},te=${signature},li=` : `t=${timestamp},te=,li=${signature}` };
 }
 
-function paymentEventPayload(type, metadata, { amountCentavos = 100000 } = {}) {
+function paymentEventPayload(type, metadata, { amountCentavos = 100000, livemode = true } = {}) {
     return {
         data: {
             attributes: {
                 type,
+                livemode,
                 data: {
                     id: `pay_test_${Math.random().toString(36).slice(2, 8)}`,
                     attributes: {

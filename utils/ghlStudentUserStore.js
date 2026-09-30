@@ -15,6 +15,7 @@ function rowToRecord(row) {
         ghlUserId: row.ghl_user_id || null,
         status: row.status,
         error: row.error || null,
+        isTest: Boolean(row.is_test),
         attempts: Number(row.attempts),
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString()
@@ -26,13 +27,13 @@ function rowToRecord(row) {
  * { claimed: true, record } for the first caller, or { claimed: false, record } with the
  * pre-existing row for a repeated webhook.
  */
-async function claim({ paymentReference, email, fullName, productId }) {
+async function claim({ paymentReference, email, fullName, productId, isTest = false }) {
     const inserted = await pool.query(
-        `INSERT INTO ghl_student_users (payment_reference, email, full_name, product_id)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO ghl_student_users (payment_reference, email, full_name, product_id, is_test)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (payment_reference) DO NOTHING
          RETURNING *`,
-        [paymentReference, email, fullName || null, productId || null]
+        [paymentReference, email, fullName || null, productId || null, Boolean(isTest)]
     );
     if (inserted.rows[0]) return { claimed: true, record: rowToRecord(inserted.rows[0]) };
     return { claimed: false, record: await findByPaymentReference(paymentReference) };

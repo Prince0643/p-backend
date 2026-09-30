@@ -8,6 +8,7 @@ const { requireAdminAuth } = require('../middleware/adminAuth');
 // router's paths (e.g. /coupons) before they get a chance to run their own auth.
 router.post('/auth/login', adminAuthController.login);
 router.get('/auth/me', requireAdminAuth, adminAuthController.me);
+router.post('/test-checkout-token', requireAdminAuth, adminAuthController.testCheckoutToken);
 router.get('/admins', requireAdminAuth, adminAuthController.list);
 router.post('/admins', requireAdminAuth, adminAuthController.create);
 router.delete('/admins/:id', requireAdminAuth, adminAuthController.revoke);

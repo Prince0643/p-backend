@@ -392,6 +392,68 @@ Scripts: `node scripts/backfillGhlCouponOrders.js [--apply]` (full-history backf
 
 ---
 
+## Per-checkout PayMongo TEST mode (Admin)
+
+The site is always **live**. There is no global switch. An admin can run a single checkout in PayMongo **test mode** (PayMongo test cards / e-wallets) to test forms end to end.
+
+### 1. Get a test token
+
+**POST** `/api/admin/test-checkout-token` (admin auth: `Authorization: Bearer <admin token>` or `x-api-key`)
+
+```json
+{ "success": true, "token": "<signed token>", "expiresAt": "2026-01-01T12:00:00.000Z", "mode": "test" }
+```
+
+The token is HMAC-signed with `AUTH_TOKEN_SECRET`, expires after about 2 hours, carries the admin email and is a different token type from admin session tokens (a session token is rejected as a test token). Returns `503` if the `PAYMONGO_TEST_*` env vars are missing.
+
+### 2. Use it on a checkout
+
+Send the token as `testToken` (JSON body) or the `x-nx-test-token` header to:
+- `POST /api/payments/create-payment-intent`
+- `POST /api/embed/checkout` (body field `testToken`)
+- `GET /api/payments/methods`, `GET /api/payments/capabilities` (header or `?testToken=`) - answered from the test account; `/methods` also returns `mode: "test"` and the test `publicKey`.
+
+| Situation | Result |
+|-----------|--------|
+| No token | Live, exactly as before |
+| Valid token | Test keys used; the checkout response includes `testMode: true` |
+| Invalid / expired / wrong-type token, or revoked admin | `403` `{ "error": "Invalid or expired test checkout token" }` |
+| Valid token but test env missing | `503` - never falls back to live |
+| `POST /api/clockistry/create-payment-intent` with a token | `400` (Clockistry is live-only) |
+
+### What a test checkout does
+
+- The `digital_solutions_transactions` row has `is_test = true` (TEST badge in Solutions, excluded from dashboard revenue) and stores the PayMongo payment intent id (`paymongo_payment_intent_id`).
+- **Status polling** (`GET /api/payments/status/:id`, `/retry/:id`) always uses the mode stored on that row, never the caller's input (the response has `testMode: true` for test intents).
+- Coupon reservations and redemptions are created with `is_test = true`: they do not count toward the coupon's live limit, live pending holds, "already used" checks, payouts or totals, and never release a live hold.
+- On payment, **no GHL contact upsert, invoice or invoice schedule** is created.
+- The GHL student user (`ghl_practice_access`, `ghl_premium_plan`) is still created; `ghl_student_users.is_test = true`.
+- The LeadConnector webhook is still sent (`payment_initiated`, `payment_successful`, `payment_failed`, student follow-up) with top-level `isTest: true` and `livemode: false`. Live payloads are unchanged.
+
+### Admin UI and embeds
+
+Admin > Products > select a product > **Test checkout** opens `/admin/test-checkout` in a new tab. The token travels in the URL fragment (never sent to a server) and is passed to `nx-embed.js` through the `data-nx-test` attribute. The form shows a **TEST MODE - no real charge** banner and the page lists PayMongo test cards. The token is never part of the public embed snippet.
+
+To test a real funnel page, open it with `?nx_test=<token>` (the token is shown on the test checkout page). `nx-embed.js` (and the generated product-page snippet) read it from the URL only and send it as `testToken`; nothing is stored in cookies/localStorage.
+
+### Test webhook verification
+
+`Paymongo-Signature: t=<ts>,te=<test hmac>,li=<live hmac>`. Per PayMongo, live events populate `li` (te empty), test events populate `te` (li empty). `li` is verified only with `PAYMONGO_WEBHOOK_SECRET`, `te` only with `PAYMONGO_TEST_WEBHOOK_SECRET`. The verified mode must equal the payload's `data.attributes.livemode`, otherwise `400`. A test event only updates records created in test mode, and a live event only live records (mismatches are acknowledged with `200` and ignored). A missing live secret in production still fails closed (`500`).
+
+**PayMongo test cards** (any future expiry, any 3-digit CVC; source: PayMongo "Testing" docs):
+
+| Number | Result |
+|--------|--------|
+| `4343434343434345` | Visa, success |
+| `4571736000000075` | Visa, success |
+| `5123000000000002` | Mastercard, success |
+| `4120000000000007` | Visa, success with 3DS (choose Authorize) |
+| `4200000000000018` / `4300000000000017` / `5100000000000198` / `4111111111111111` | Declined: expired card / invalid CVC / insufficient funds / generic |
+
+E-wallets (GCash, Maya, GrabPay, ShopeePay): open the redirect page and choose Authorize or Fail.
+
+---
+
 ## Webhook Endpoint (Internal)
 
 **POST** `/api/payments/webhook`
@@ -424,6 +486,10 @@ Run `npm run migrate` (i.e. `node db/migrate.js`) once against a fresh database 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `PAYMONGO_SECRET_KEY` | Yes | PayMongo API secret key (sk_...) |
+| `PAYMONGO_PUBLIC_KEY` | No | PayMongo public key (pk_...) |
+| `PAYMONGO_TEST_SECRET_KEY` | No | PayMongo **test** secret key (`sk_test_...`). With the two below, enables per-checkout test mode. If missing, test mode is unavailable (503), never a fallback to live. |
+| `PAYMONGO_TEST_PUBLIC_KEY` | No | PayMongo test public key (`pk_test_...`) |
+| `PAYMONGO_TEST_WEBHOOK_SECRET` | No | Signing secret (`whsk_...`) of the test-mode webhook (same URL as live) |
 | `TAX_RATE` | Yes | Tax rate as decimal (e.g., `0.10` for 10%) |
 | `PAYMONGO_FILTER_METHOD_TYPES` | No | Set to `true` to filter checkout methods using PayMongo merchant capabilities |
 | `DIAGNOSTIC_TOKEN` | No | If set, requires `x-diagnostic-token` for `/api/payments/capabilities` |

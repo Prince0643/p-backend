@@ -18,6 +18,11 @@ const PRICING = {
  */
 exports.createPaymentIntent = async (req, res) => {
     try {
+        // Clockistry/Nexiflow checkouts are live-only: refuse a test token instead of silently going live.
+        if (req.body && req.body.testToken) {
+            return res.status(400).json({ error: 'Test mode is not supported for Clockistry checkouts' });
+        }
+
         const {
             companyId,
             userId,

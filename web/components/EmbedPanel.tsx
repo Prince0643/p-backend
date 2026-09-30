@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useSyncExternalStore } from "react";
+import { TestCards } from "@/components/TestCards";
 
 const DEFAULT_BACKEND = "https://api.nexistrydigitalsolutions.com";
 const DEFAULT_ACCENT = "#2563eb";
@@ -36,7 +37,15 @@ const subscribeNoop = () => () => {};
 const getOrigin = () => window.location.origin;
 const getServerOrigin = () => "";
 
-export function EmbedPanel({ productId, onCopyFallbackToast }: { productId: string; onCopyFallbackToast: (m: string) => void }) {
+export function EmbedPanel({
+  productId,
+  onCopyFallbackToast,
+  onTestCheckout,
+}: {
+  productId: string;
+  onCopyFallbackToast: (m: string) => void;
+  onTestCheckout: (productId: string) => void;
+}) {
   const [backendUrl, setBackendUrl] = useState(DEFAULT_BACKEND);
   const [accent, setAccent] = useState(DEFAULT_ACCENT);
   const [buttonText, setButtonText] = useState(DEFAULT_BUTTON);
@@ -97,13 +106,22 @@ export function EmbedPanel({ productId, onCopyFallbackToast }: { productId: stri
     <>
       <div className="flex items-center justify-between gap-3 p-3.5">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Embed form</h2>
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-        >
-          {copied ? "Copied!" : "Copy"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onTestCheckout(productId)}
+            className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-sm font-bold text-amber-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+          >
+            Test checkout
+          </button>
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
       </div>
       <div className="px-4 pb-4">
         <p className="mb-3 text-xs text-slate-400">
@@ -148,9 +166,14 @@ export function EmbedPanel({ productId, onCopyFallbackToast }: { productId: stri
           />
         </label>
 
+        <div className="mt-4">
+          <TestCards />
+        </div>
+
         <h3 className="mb-1.5 mt-4 text-xs font-bold uppercase tracking-wide text-slate-200">Live preview</h3>
         <p className="mb-2 text-[11px] text-amber-300">
-          Warning: submitting the preview creates a real PayMongo checkout.
+          Warning: submitting the preview creates a real PayMongo checkout. Use <b>Test checkout</b> above to try it
+          with PayMongo test cards instead.
         </p>
         {origin && (
           <iframe

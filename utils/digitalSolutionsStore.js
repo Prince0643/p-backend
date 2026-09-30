@@ -27,6 +27,7 @@ function rowToTransaction(row, { withRaw = false } = {}) {
         createdAt: new Date(row.created_at).toISOString(),
         updatedAt: new Date(row.updated_at).toISOString(),
         isTest: Boolean(row.is_test),
+        paymongoPaymentIntentId: row.paymongo_payment_intent_id || undefined,
         ghlLocationId: row.ghl_location_id || undefined,
         ghlProductIds: row.type === 'ghl_order' ? ghlProductIds : undefined,
         ghlPaymentStatus: row.ghl_payment_status || undefined,
@@ -47,8 +48,8 @@ async function recordTransaction(entry) {
 
     const { rows } = await pool.query(
         `INSERT INTO digital_solutions_transactions
-            (id, type, transaction_id, customer_email, customer_name, company_id, user_id, product_id, product_name, plan, user_count, amount, currency, promo_code, source, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            (id, type, transaction_id, customer_email, customer_name, company_id, user_id, product_id, product_name, plan, user_count, amount, currency, promo_code, source, status, is_test, paymongo_payment_intent_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          RETURNING *`,
         [
             id, entry.type, String(entry.transactionId || ''),
@@ -64,7 +65,9 @@ async function recordTransaction(entry) {
             entry.currency ? String(entry.currency).toUpperCase() : 'PHP',
             entry.promoCode ? String(entry.promoCode) : null,
             entry.source ? String(entry.source) : null,
-            entry.status || 'initiated'
+            entry.status || 'initiated',
+            Boolean(entry.isTest),
+            entry.paymongoPaymentIntentId ? String(entry.paymongoPaymentIntentId) : null
         ]
     );
     return rowToTransaction(rows[0]);
@@ -75,13 +78,17 @@ async function recordTransaction(entry) {
  * the PayMongo webhook reports paid/failed. No-op (returns null) if the
  * transaction isn't found - e.g. it predates this tracker.
  */
-async function updateTransactionStatus(transactionId, status) {
+async function updateTransactionStatus(transactionId, status, { isTest } = {}) {
     const id = String(transactionId || '');
     if (!id) return null;
 
+    // When isTest is given (webhook events), only a row created in that same PayMongo mode is touched.
+    const params = [id, status];
+    let modeClause = '';
+    if (isTest === true || isTest === false) { params.push(isTest); modeClause = ' AND is_test = $3'; }
     const { rows } = await pool.query(
-        `UPDATE digital_solutions_transactions SET status = $2, updated_at = now() WHERE transaction_id = $1 RETURNING *`,
-        [id, status]
+        `UPDATE digital_solutions_transactions SET status = $2, updated_at = now() WHERE transaction_id = $1${modeClause} RETURNING *`,
+        params
     );
     return rows[0] ? rowToTransaction(rows[0]) : null;
 }
@@ -104,6 +111,17 @@ async function listTransactions({ type, status, companyId, email, isTest } = {})
 async function findByTransactionId(transactionId) {
     const { rows } = await pool.query('SELECT * FROM digital_solutions_transactions WHERE transaction_id = $1', [String(transactionId || '')]);
     return rows[0] ? rowToTransaction(rows[0], { withRaw: true }) : null;
+}
+
+/** The transaction created for a PayMongo payment intent (carries the stored is_test mode), or null. */
+async function findByPaymongoPaymentIntentId(paymentIntentId) {
+    const id = String(paymentIntentId || '');
+    if (!id) return null;
+    const { rows } = await pool.query(
+        'SELECT * FROM digital_solutions_transactions WHERE paymongo_payment_intent_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [id]
+    );
+    return rows[0] ? rowToTransaction(rows[0]) : null;
 }
 
 /** Status + test flag of an already-recorded GHL order, or null. Lets the import skip re-fetching unchanged orders. */
@@ -160,6 +178,7 @@ module.exports = {
     updateTransactionStatus,
     listTransactions,
     findByTransactionId,
+    findByPaymongoPaymentIntentId,
     getGhlOrderState,
     upsertGhlOrder
 };

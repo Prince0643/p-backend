@@ -1,5 +1,7 @@
 const adminStore = require('../utils/adminStore');
 const { issueToken } = require('../utils/authToken');
+const { issueTestCheckoutToken } = require('../utils/testMode');
+const paymongoService = require('../services/paymongoService');
 
 // POST /api/admin/auth/login (public)
 exports.login = async (req, res) => {
@@ -26,6 +28,24 @@ exports.me = async (req, res) => {
         res.json({ success: true, admin: { id: admin.id, email: admin.email, active: !admin.revoked_at } });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to load session' });
+    }
+};
+
+// POST /api/admin/test-checkout-token (requires auth) - mints a short-lived (~2h) signed token
+// that puts ONE checkout into PayMongo TEST mode when sent as `testToken` to a checkout-creating
+// endpoint. 503 if the PAYMONGO_TEST_* env vars aren't configured (never falls back to live).
+exports.testCheckoutToken = (req, res) => {
+    try {
+        paymongoService.forMode('test');
+    } catch (err) {
+        if (err.code === 'TEST_MODE_UNAVAILABLE') return res.status(503).json({ error: err.message });
+        return res.status(500).json({ error: err.message || 'Failed to issue test checkout token' });
+    }
+    try {
+        const { token, expiresAt } = issueTestCheckoutToken(req.admin);
+        res.json({ success: true, token, expiresAt, mode: 'test' });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to issue test checkout token' });
     }
 };
 

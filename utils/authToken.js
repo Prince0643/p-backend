@@ -24,9 +24,9 @@ function sign(payloadB64) {
     return crypto.createHmac('sha256', getSecret()).update(payloadB64).digest('base64url');
 }
 
-/** Issues a signed token identifying a subject (e.g. { type: 'admin', id }). */
-function issueToken(subject) {
-    const payload = { ...subject, iat: Date.now(), exp: Date.now() + TOKEN_TTL_MS };
+/** Issues a signed token identifying a subject (e.g. { type: 'admin', id }). `ttlMs` overrides the default 30-day lifetime. */
+function issueToken(subject, { ttlMs = TOKEN_TTL_MS } = {}) {
+    const payload = { ...subject, iat: Date.now(), exp: Date.now() + ttlMs };
     const payloadB64 = base64url(JSON.stringify(payload));
     const signature = sign(payloadB64);
     return `${payloadB64}.${signature}`;

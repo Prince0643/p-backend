@@ -154,6 +154,25 @@ export default function ProductsPage() {
     }
   }
 
+  // Opens a new tab in PayMongo TEST mode. The tab is opened synchronously (popup blockers), then
+  // pointed at the preview page once the short-lived admin-only token arrives. The token travels
+  // in the URL fragment, so it is never sent to a server or logged.
+  async function handleTestCheckout(productId: string) {
+    const key = requireAuth();
+    if (!key) return;
+    const tab = window.open("", "_blank");
+    try {
+      const data = await apiFetch<{ token: string; expiresAt: string }>("/api/admin/test-checkout-token", key, { method: "POST" });
+      const hash = new URLSearchParams({ t: data.token, p: productId, exp: data.expiresAt }).toString();
+      const url = `/admin/test-checkout#${hash}`;
+      if (tab) tab.location.href = url;
+      else window.location.href = url;
+    } catch (e) {
+      tab?.close();
+      if (!handleAuthError(e)) toast((e as Error).message);
+    }
+  }
+
   const filtered = products.filter((p) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -298,7 +317,7 @@ export default function ProductsPage() {
           <div className="h-px bg-white/10" />
 
           {selectedId ? (
-            <EmbedPanel productId={selectedId} onCopyFallbackToast={toast} />
+            <EmbedPanel productId={selectedId} onCopyFallbackToast={toast} onTestCheckout={handleTestCheckout} />
           ) : (
             <p className="p-4 text-xs text-slate-400">Save or select a product to get its embed form.</p>
           )}

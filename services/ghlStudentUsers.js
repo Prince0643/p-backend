@@ -168,14 +168,14 @@ function toWebhookAccount(email, result) {
  * Called from the paid webhook. Returns null for non-student products, otherwise the
  * `ghlStudentAccount` webhook object. Never throws.
  */
-async function provisionForPayment({ paymentReference, email, fullName, productId }) {
+async function provisionForPayment({ paymentReference, email, fullName, productId, isTest = false }) {
     if (!isStudentProduct(productId)) return null;
     const normalizedEmail = String(email || '').trim().toLowerCase();
     try {
         if (!paymentReference) {
             return toWebhookAccount(normalizedEmail, { status: 'failed' });
         }
-        const { claimed, record } = await store.claim({ paymentReference, email: normalizedEmail, fullName, productId });
+        const { claimed, record } = await store.claim({ paymentReference, email: normalizedEmail, fullName, productId, isTest });
         if (!claimed) {
             // Repeated webhook: never create twice. The original delivery already carried the password.
             const status = record?.status === 'created' || record?.status === 'existing' ? record.status : 'failed';
@@ -212,6 +212,7 @@ async function retryRow(record, { sendWebhook = true } = {}) {
                 fullName: record.fullName,
                 email: record.email,
                 ghlStudentAccount: toWebhookAccount(record.email, result),
+                ...(record.isTest ? { isTest: true, livemode: false } : {}),
                 completedAt: new Date().toISOString()
             });
         } catch (err) {

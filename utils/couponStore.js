@@ -262,7 +262,7 @@ const PENDING_RESERVATION_TTL_MINUTES = 30;
  * `mutate: false` it writes nothing and per-customer rules apply only when an email is
  * given. Returns { coupon } or { error, reason }.
  */
-async function checkCouponRules(db, { couponRow, normalizedCode, productId, normalizedEmail, mutate }) {
+async function checkCouponRules(db, { couponRow, normalizedCode, productId, normalizedEmail, mutate, isTest = false }) {
     if (!couponRow) return { error: 'Invalid promo code', reason: 'not_found' };
 
     if (!couponRow.active) return { error: 'This promo code is no longer active', reason: 'inactive' };
@@ -317,8 +317,9 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
                      WHERE cr.code = c2.code AND c2.type = 'affiliate'
                        AND lower(cr.email) = $1
                        AND cr.status = 'pending'
+                       AND cr.is_test = $3
                        AND cr.created_at > now() - $2::interval`,
-                    [normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
+                    [normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`, Boolean(isTest)]
                 );
             }
 
@@ -346,8 +347,9 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
                      WHERE code = $1
                        AND lower(email) = $2
                        AND status = 'pending'
+                       AND is_test = $4
                        AND created_at > now() - $3::interval`,
-                    [normalizedCode, normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`]
+                    [normalizedCode, normalizedEmail, `${PENDING_RESERVATION_TTL_MINUTES} minutes`, Boolean(isTest)]
                 );
             }
 
@@ -394,7 +396,7 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
  * or abortCouponReservation (rolls back), which release the client either way.
  * On failure, returns { error, reason } and the transaction/client are already closed.
  */
-async function beginCouponReservation({ code, productId, email }) {
+async function beginCouponReservation({ code, productId, email, isTest = false }) {
     const normalizedCode = toCouponCode(code);
     if (!normalizedCode) return { error: 'No promo code provided' };
 
@@ -406,7 +408,7 @@ async function beginCouponReservation({ code, productId, email }) {
 
         const { rows: couponRows } = await client.query('SELECT * FROM coupons WHERE code = $1 FOR UPDATE', [normalizedCode]);
         const result = await checkCouponRules(client, {
-            couponRow: couponRows[0], normalizedCode, productId, normalizedEmail, mutate: true
+            couponRow: couponRows[0], normalizedCode, productId, normalizedEmail, mutate: true, isTest
         });
         if (result.error) {
             await client.query('ROLLBACK').catch(() => {});
@@ -440,8 +442,8 @@ async function finalizeCouponReservation(client, entry) {
     try {
         const id = `RDM${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
         const { rows } = await client.query(
-            `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, campaign_id, commission_base)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13)
+            `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, campaign_id, commission_base, is_test)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$14)
              ON CONFLICT (payment_reference) DO NOTHING
              RETURNING *`,
             [
@@ -449,7 +451,8 @@ async function finalizeCouponReservation(client, entry) {
                 entry.email || null, entry.fullName || null, Number(entry.baseAmount) || 0,
                 Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
                 entry.affiliateEmail || null, entry.currency || 'PHP', entry.campaignId || null,
-                entry.commissionBase != null ? Number(entry.commissionBase) : null
+                entry.commissionBase != null ? Number(entry.commissionBase) : null,
+                Boolean(entry.isTest)
             ]
         );
         if (!rows[0]) {
@@ -482,12 +485,16 @@ async function abortCouponReservation(client) {
  * paid for THAT checkout, so it must still be recorded as paid rather than silently
  * dropped. Returns null if no matching row exists (already paid, or none was made).
  */
-async function markReservationPaid({ paymentReference }) {
+async function markReservationPaid({ paymentReference, isTest }) {
     const ref = String(paymentReference || '');
     if (!ref) return null;
+    // When isTest is given (webhook events), only a reservation made in that same PayMongo mode is confirmed.
+    const params = [ref];
+    let modeClause = '';
+    if (isTest === true || isTest === false) { params.push(isTest); modeClause = ' AND is_test = $2'; }
     const { rows } = await pool.query(
-        `UPDATE coupon_redemptions SET status = 'paid', paid_at = now() WHERE payment_reference = $1 AND status IN ('pending', 'released') RETURNING *`,
-        [ref]
+        `UPDATE coupon_redemptions SET status = 'paid', paid_at = now() WHERE payment_reference = $1 AND status IN ('pending', 'released')${modeClause} RETURNING *`,
+        params
     );
     return rows[0] ? rowToRedemption(rows[0]) : null;
 }
@@ -500,12 +507,15 @@ async function findRedemptionByPaymentReference(paymentReference) {
 }
 
 /** Releases a pending hold (payment failed/was cancelled) so the coupon use is freed up again. */
-async function releaseReservation(paymentReference) {
+async function releaseReservation(paymentReference, { isTest } = {}) {
     const ref = String(paymentReference || '');
     if (!ref) return 0;
+    const params = [ref];
+    let modeClause = '';
+    if (isTest === true || isTest === false) { params.push(isTest); modeClause = ' AND is_test = $2'; }
     const { rowCount } = await pool.query(
-        `UPDATE coupon_redemptions SET status = 'released', released_at = now() WHERE payment_reference = $1 AND status = 'pending'`,
-        [ref]
+        `UPDATE coupon_redemptions SET status = 'released', released_at = now() WHERE payment_reference = $1 AND status = 'pending'${modeClause}`,
+        params
     );
     return rowCount;
 }
@@ -550,8 +560,8 @@ function rowToRedemption(row) {
 async function insertRedemptionPaid(entry, campaignId) {
     const id = `RDM${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
     const { rows } = await pool.query(
-        `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, paid_at, campaign_id, commission_base)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'paid',now(),$12,$13)
+        `INSERT INTO coupon_redemptions (id, code, payment_reference, product_id, email, full_name, base_amount, discount_amount, affiliate_fee_amount, affiliate_email, currency, status, paid_at, campaign_id, commission_base, is_test)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'paid',now(),$12,$13,$14)
          ON CONFLICT (payment_reference) DO NOTHING
          RETURNING *`,
         [
@@ -559,7 +569,8 @@ async function insertRedemptionPaid(entry, campaignId) {
             entry.email || null, entry.fullName || null, Number(entry.baseAmount) || 0,
             Number(entry.discountAmount) || 0, Number(entry.affiliateFeeAmount) || 0,
             entry.affiliateEmail || null, entry.currency || 'PHP', campaignId || null,
-            entry.commissionBase != null ? Number(entry.commissionBase) : null
+            entry.commissionBase != null ? Number(entry.commissionBase) : null,
+            Boolean(entry.isTest)
         ]
     );
     return rows[0] ? rowToRedemption(rows[0]) : null;

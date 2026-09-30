@@ -55,6 +55,8 @@ type SolutionTransaction = {
   type: string;
   productName?: string;
   amount: number;
+  currency?: string;
+  isTest?: boolean;
   status: string;
   createdAt: string;
 };
@@ -262,9 +264,11 @@ export default function AdminDashboardPage() {
     const weeklyRevenue = sumByCurrency(weeklyPaid, (r) => r.baseAmount);
     const weeklyCommission = sumByCurrency(weeklyPaid, (r) => r.affiliateFeeAmount);
     const totalCommission = sumByCurrency(paid, (r) => r.affiliateFeeAmount);
-    const solutionRevenue = data.transactions
-      .filter((t) => t.status === "completed" || t.status === "paid")
-      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    // Per-currency (Academy/Clockistry are PHP, GHL orders are USD) and never counting GHL test-mode orders.
+    const solutionRevenue = sumByCurrency(
+      data.transactions.filter((t) => !t.isTest && (t.status === "completed" || t.status === "paid")),
+      (t) => Number(t.amount || 0)
+    );
 
     return {
       activeAffiliates: activeAffiliates.length,
@@ -378,7 +382,7 @@ export default function AdminDashboardPage() {
               </div>
               <div>
                 <div className="text-slate-400">Solution revenue</div>
-                <div className="mt-1 text-lg font-extrabold">{money(stats.solutionRevenue)}</div>
+                <div className="mt-1 text-lg font-extrabold">{formatByCurrency(stats.solutionRevenue)}</div>
               </div>
             </div>
           </div>
@@ -473,7 +477,7 @@ export default function AdminDashboardPage() {
           <QuickLink href="/admin/products" label="Products" value={`${data.products.length} catalog items`} />
           <QuickLink href="/admin/coupons" label="Coupons" value={`${data.coupons.length} total codes`} />
           <QuickLink href="/admin/affiliates" label="Affiliates" value={`${stats.activeAffiliates} active`} />
-          <QuickLink href="/admin/solutions" label="Solutions" value={money(stats.solutionRevenue)} />
+          <QuickLink href="/admin/solutions" label="Solutions" value={formatByCurrency(stats.solutionRevenue)} />
         </section>
       </main>
       <Toast message={message} />

@@ -477,3 +477,161 @@ test('every import run first retries pending affiliate-coupon pushes', async () 
         await cleanupCoupon(code);
     }
 });
+
+// ---- Solutions page mirror (digital_solutions_transactions) ----
+const solOrderIds = [];
+let detailCalls = [];
+
+/** Same as mockOrdersApi but records order-detail fetches so tests can assert on API-call frugality. */
+function mockSolApi(orders, detailById) {
+    detailCalls = [];
+    mockOrdersApi({
+        orders,
+        detailByIdFn: (id) => {
+            detailCalls.push(id);
+            return detailById(id);
+        }
+    });
+}
+
+function solOrder(overrides = {}) {
+    const order = baseOrder({ _id: `solorder_${Math.random().toString(36).slice(2, 10)}`, couponCode: undefined, amount: 85, createdAt: '2026-09-01T10:00:00.000Z', ...overrides });
+    solOrderIds.push(order._id);
+    return order;
+}
+
+afterEach(async () => {
+    if (!solOrderIds.length) return;
+    const refs = solOrderIds.splice(0).map((id) => `ghl:${id}`);
+    await pool.query('DELETE FROM digital_solutions_transactions WHERE transaction_id = ANY($1)', [refs]);
+    await pool.query('DELETE FROM coupon_redemptions WHERE payment_reference = ANY($1)', [refs]);
+});
+
+const solutionRow = async (order) => (await pool.query('SELECT * FROM digital_solutions_transactions WHERE transaction_id = $1', [`ghl:${order._id}`])).rows;
+
+const detailFor = (order, extra = {}) => ({
+    amount: order.amount,
+    amountSummary: { subtotal: order.subtotal, discount: order.discount, tax: 0, shipping: 0 },
+    contactSnapshot: { id: 'contact_sol', email: 'Detail.Email@Example.com', firstName: 'Detail', lastName: 'Buyer' },
+    items: [
+        { name: 'Item One', qty: 1, product: { _id: 'gp_1', name: 'Item One' }, price: { amount: 60 } },
+        { name: 'Item Two', qty: 1, product: { _id: 'gp_2', name: 'Item Two' }, price: { amount: 40 } }
+    ],
+    markAsTest: false,
+    ...extra
+});
+
+test('live paid coupon order: redemption (affiliate credit) AND a solutions row', async () => {
+    const email = `sol.aff.${Date.now()}@example.com`;
+    const code = await createTestCoupon({ type: 'affiliate', discountPercent: 0.15, affiliateFeePercent: 0.10, affiliateEmail: email });
+    const order = solOrder({ couponCode: code });
+    mockSolApi([order], () => detailFor(order));
+    try {
+        const summary = await importGlobalOrders({});
+        assert.equal(summary.imported, 1);
+        assert.equal(summary.solutionsRecorded, 1);
+        assert.equal(summary.solutionsUpdated, 0);
+
+        const rows = await solutionRow(order);
+        assert.equal(rows.length, 1);
+        const r = rows[0];
+        assert.equal(r.type, 'ghl_order');
+        assert.equal(r.source, 'ghl');
+        assert.equal(r.status, 'paid');
+        assert.equal(r.is_test, false);
+        assert.equal(r.promo_code, code);
+        assert.equal(Number(r.amount), 85);
+        assert.equal(r.currency, 'USD');
+        assert.equal(r.customer_email, 'detail.email@example.com');
+        assert.equal(r.customer_name, 'Detail Buyer');
+        assert.equal(r.product_name, 'Item One, Item Two');
+        assert.deepEqual(r.ghl_product_ids, ['gp_1', 'gp_2']);
+        assert.equal(r.ghl_location_id, GLOBAL_LOCATION_ID);
+        assert.equal(new Date(r.created_at).toISOString(), order.createdAt);
+
+        const { rows: red } = await pool.query('SELECT * FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(red.length, 1);
+        assert.equal(Number(red[0].affiliate_fee_amount), 8.5);
+        assert.equal(detailCalls.length, 1, 'detail fetched once and shared by both paths');
+    } finally {
+        await cleanupCoupon(code);
+    }
+});
+
+test('test-mode order (liveMode false or markAsTest): solutions row with is_test, no redemption, no coupon created', async () => {
+    const code = `GHLTEST${Date.now().toString(36).toUpperCase()}`;
+    const listTest = solOrder({ couponCode: code, liveMode: false });
+    const detailTest = solOrder({ couponCode: code });
+    mockSolApi([listTest, detailTest], (id) => detailFor(id === detailTest._id ? detailTest : listTest, id === detailTest._id ? { markAsTest: true } : {}));
+    const summary = await importGlobalOrders({});
+    assert.equal(summary.solutionsRecorded, 2);
+    assert.equal(summary.imported, 0);
+    assert.equal(summary.skipped.test, 2);
+    for (const order of [listTest, detailTest]) {
+        const rows = await solutionRow(order);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].is_test, true);
+        assert.equal(rows[0].promo_code, code);
+        const { rowCount } = await pool.query('SELECT 1 FROM coupon_redemptions WHERE payment_reference = $1', [`ghl:${order._id}`]);
+        assert.equal(rowCount, 0);
+    }
+    const { rowCount: couponRows } = await pool.query('SELECT 1 FROM coupons WHERE code = $1', [code]);
+    assert.equal(couponRows, 0);
+});
+
+test('no-coupon order: solutions row only', async () => {
+    const order = solOrder({ amount: 100, discount: 0 });
+    mockSolApi([order], () => detailFor(order));
+    const summary = await importGlobalOrders({});
+    assert.equal(summary.solutionsRecorded, 1);
+    assert.equal(summary.imported, 0);
+    assert.equal(summary.skipped.noCoupon, 1);
+    const rows = await solutionRow(order);
+    assert.equal(rows[0].promo_code, null);
+    assert.equal(rows[0].is_test, false);
+});
+
+test('invoice-sourced order is skipped everywhere', async () => {
+    const order = solOrder({ sourceType: 'invoice', couponCode: undefined });
+    mockSolApi([order], () => detailFor(order));
+    const summary = await importGlobalOrders({});
+    assert.equal(summary.solutionsRecorded, 0);
+    assert.equal((await solutionRow(order)).length, 0);
+    assert.equal(detailCalls.length, 0);
+});
+
+test('re-run does not duplicate or re-fetch; a status change (paid -> refunded) updates the row', async () => {
+    const order = solOrder();
+    mockSolApi([order], () => detailFor(order));
+    await importGlobalOrders({});
+    assert.equal(detailCalls.length, 1);
+
+    const rerun = await importGlobalOrders({});
+    assert.equal(rerun.solutionsRecorded, 0);
+    assert.equal(rerun.solutionsUpdated, 0);
+    assert.equal(detailCalls.length, 1, 'unchanged order is not re-fetched');
+    assert.equal((await solutionRow(order)).length, 1);
+
+    order.paymentStatus = 'refunded';
+    const refunded = await importGlobalOrders({});
+    assert.equal(refunded.solutionsUpdated, 1);
+    assert.equal(refunded.solutionsRecorded, 0);
+    assert.equal(detailCalls.length, 2);
+    const rows = await solutionRow(order);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'refunded');
+    assert.equal(new Date(rows[0].created_at).toISOString(), order.createdAt);
+
+    order.paymentStatus = 'unpaid';
+    await importGlobalOrders({});
+    assert.equal((await solutionRow(order))[0].status, 'pending');
+});
+
+test('dry run writes no solutions rows', async () => {
+    const order = solOrder();
+    mockSolApi([order], () => detailFor(order));
+    const summary = await importGlobalOrders({ dryRun: true });
+    assert.equal(summary.wouldRecordSolutions, 1);
+    assert.equal((await solutionRow(order)).length, 0);
+});
+

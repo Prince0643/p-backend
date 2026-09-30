@@ -163,6 +163,25 @@ CREATE INDEX IF NOT EXISTS idx_dst_customer_email ON digital_solutions_transacti
 CREATE INDEX IF NOT EXISTS idx_dst_product_id ON digital_solutions_transactions(product_id);
 CREATE INDEX IF NOT EXISTS idx_dst_promo_code ON digital_solutions_transactions(promo_code);
 
+-- Native GHL checkout orders (live AND test-mode, with or without a coupon) are mirrored here
+-- by services/ghlOrderImport.js as type 'ghl_order', transaction_id 'ghl:<orderId>' (already
+-- UNIQUE above, so upserts are idempotent per order). Their statuses (paid, refunded,
+-- partially_refunded, failed, pending, ...) go beyond the original PayMongo set, GHL product ids
+-- are not rows in `products`, and a GHL coupon code is not necessarily a row in `coupons`
+-- (test orders never auto-create coupons) - so the type CHECK is widened and the status CHECK and
+-- promo_code FK are dropped. is_test rows are excluded from revenue totals.
+ALTER TABLE digital_solutions_transactions DROP CONSTRAINT IF EXISTS digital_solutions_transactions_type_check;
+ALTER TABLE digital_solutions_transactions ADD CONSTRAINT digital_solutions_transactions_type_check CHECK (type IN ('academy_product', 'clockistry_subscription', 'ghl_order'));
+ALTER TABLE digital_solutions_transactions DROP CONSTRAINT IF EXISTS digital_solutions_transactions_status_check;
+ALTER TABLE digital_solutions_transactions DROP CONSTRAINT IF EXISTS digital_solutions_transactions_promo_code_fkey;
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS ghl_location_id TEXT;
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS ghl_product_ids TEXT[];
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS ghl_payment_status TEXT;
+-- Small snapshot of the GHL order detail (totals, items, mode) so admins can audit what GHL returned.
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS raw JSONB;
+CREATE INDEX IF NOT EXISTS idx_dst_is_test ON digital_solutions_transactions(is_test);
+
 CREATE TABLE IF NOT EXISTS ghl_invoice_schedules (
     location_id             TEXT NOT NULL,
     contact_id              TEXT NOT NULL,

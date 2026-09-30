@@ -1,11 +1,13 @@
 // utils/digitalSolutionsStore.js
 //
 // Relational ledger of every "digital solution" transaction this backend processes -
-// Nexistry Academy product purchases and Clockistry/Nexiflow subscription upgrades.
+// Nexistry Academy product purchases, Clockistry/Nexiflow subscription upgrades, and native
+// GHL checkout orders (type 'ghl_order', live and test mode, mirrored by ghlOrderImport).
 const pool = require('../db/pool');
 
-function rowToTransaction(row) {
-    return {
+function rowToTransaction(row, { withRaw = false } = {}) {
+    const ghlProductIds = row.ghl_product_ids || [];
+    const transaction = {
         id: row.id,
         type: row.type,
         transactionId: row.transaction_id,
@@ -13,7 +15,7 @@ function rowToTransaction(row) {
         customerName: row.customer_name || '',
         companyId: row.company_id || undefined,
         userId: row.user_id || undefined,
-        productId: row.product_id || undefined,
+        productId: row.product_id || (ghlProductIds.length ? ghlProductIds.join(', ') : undefined),
         productName: row.product_name || undefined,
         plan: row.plan || undefined,
         userCount: row.user_count != null ? Number(row.user_count) : undefined,
@@ -23,8 +25,15 @@ function rowToTransaction(row) {
         source: row.source || undefined,
         status: row.status,
         createdAt: new Date(row.created_at).toISOString(),
-        updatedAt: new Date(row.updated_at).toISOString()
+        updatedAt: new Date(row.updated_at).toISOString(),
+        isTest: Boolean(row.is_test),
+        ghlLocationId: row.ghl_location_id || undefined,
+        ghlProductIds: row.type === 'ghl_order' ? ghlProductIds : undefined,
+        ghlPaymentStatus: row.ghl_payment_status || undefined,
+        ghlOrderId: row.type === 'ghl_order' ? String(row.transaction_id).replace(/^ghl:/, '') : undefined
     };
+    if (withRaw) transaction.raw = row.raw || undefined;
+    return transaction;
 }
 
 /**
@@ -77,13 +86,15 @@ async function updateTransactionStatus(transactionId, status) {
     return rows[0] ? rowToTransaction(rows[0]) : null;
 }
 
-async function listTransactions({ type, status, companyId, email } = {}) {
+async function listTransactions({ type, status, companyId, email, isTest } = {}) {
     const conditions = [];
     const params = [];
     if (type) { params.push(type); conditions.push(`type = $${params.length}`); }
     if (status) { params.push(status); conditions.push(`status = $${params.length}`); }
     if (companyId) { params.push(companyId); conditions.push(`company_id = $${params.length}`); }
     if (email) { params.push(String(email).toLowerCase()); conditions.push(`customer_email = $${params.length}`); }
+
+    if (isTest === true || isTest === false) { params.push(isTest); conditions.push(`is_test = $${params.length}`); }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const { rows } = await pool.query(`SELECT * FROM digital_solutions_transactions ${where} ORDER BY created_at DESC`, params);
@@ -92,12 +103,63 @@ async function listTransactions({ type, status, companyId, email } = {}) {
 
 async function findByTransactionId(transactionId) {
     const { rows } = await pool.query('SELECT * FROM digital_solutions_transactions WHERE transaction_id = $1', [String(transactionId || '')]);
-    return rows[0] ? rowToTransaction(rows[0]) : null;
+    return rows[0] ? rowToTransaction(rows[0], { withRaw: true }) : null;
+}
+
+/** Status + test flag of an already-recorded GHL order, or null. Lets the import skip re-fetching unchanged orders. */
+async function getGhlOrderState(transactionId) {
+    const { rows } = await pool.query(
+        'SELECT status, is_test FROM digital_solutions_transactions WHERE type = $1 AND transaction_id = $2',
+        ['ghl_order', String(transactionId)]
+    );
+    return rows[0] ? { status: rows[0].status, isTest: Boolean(rows[0].is_test) } : null;
+}
+
+/**
+ * Inserts or updates the row for one GHL order, keyed by transaction_id ('ghl:<orderId>').
+ * created_at is the GHL order's own createdAt and is never changed by an update. Returns
+ * { action: 'created' | 'updated' }.
+ */
+async function upsertGhlOrder(entry) {
+    const id = `DST${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const { rows } = await pool.query(
+        `INSERT INTO digital_solutions_transactions
+            (id, type, transaction_id, customer_email, customer_name, product_name, amount, currency, promo_code, source, status,
+             created_at, is_test, ghl_location_id, ghl_product_ids, ghl_payment_status, raw)
+         VALUES ($1,'ghl_order',$2,$3,$4,$5,$6,$7,$8,'ghl',$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (transaction_id) DO UPDATE SET
+            customer_email = EXCLUDED.customer_email, customer_name = EXCLUDED.customer_name,
+            product_name = EXCLUDED.product_name, amount = EXCLUDED.amount, currency = EXCLUDED.currency,
+            promo_code = EXCLUDED.promo_code, status = EXCLUDED.status, is_test = EXCLUDED.is_test,
+            ghl_location_id = EXCLUDED.ghl_location_id, ghl_product_ids = EXCLUDED.ghl_product_ids,
+            ghl_payment_status = EXCLUDED.ghl_payment_status, raw = EXCLUDED.raw, updated_at = now()
+         WHERE digital_solutions_transactions.type = 'ghl_order'
+         RETURNING (xmax = 0) AS inserted`,
+        [
+            id, `ghl:${entry.orderId}`,
+            entry.customerEmail ? String(entry.customerEmail).toLowerCase() : null,
+            entry.customerName || null,
+            entry.productName || null,
+            entry.amount != null ? Number(entry.amount) : null,
+            entry.currency ? String(entry.currency).toUpperCase() : 'USD',
+            entry.promoCode ? String(entry.promoCode).toUpperCase() : null,
+            entry.status,
+            entry.createdAt || new Date().toISOString(),
+            Boolean(entry.isTest),
+            entry.ghlLocationId || null,
+            entry.ghlProductIds || [],
+            entry.ghlPaymentStatus || null,
+            entry.raw ? JSON.stringify(entry.raw) : null
+        ]
+    );
+    return { action: rows[0]?.inserted ? 'created' : 'updated' };
 }
 
 module.exports = {
     recordTransaction,
     updateTransactionStatus,
     listTransactions,
-    findByTransactionId
+    findByTransactionId,
+    getGhlOrderState,
+    upsertGhlOrder
 };

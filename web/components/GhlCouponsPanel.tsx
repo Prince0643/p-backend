@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { apiFetch } from "@/lib/api";
-import { formatMoney } from "@/lib/money";
+import { formatMoney, toPhpUsd } from "@/lib/money";
 
 type Handlers = {
   requireAuth: () => string | null;
@@ -50,20 +50,28 @@ const btnPrimary = "rounded-lg bg-blue-400 hover:bg-blue-300 px-3 py-2 text-sm f
 const btnDanger = "rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-1.5 text-xs font-bold text-red-200 hover:bg-red-400/20 focus-visible:outline-2 focus-visible:outline-red-300 disabled:opacity-60";
 
 function TotalsSummary({ totals, cols }: { totals: Record<string, Record<string, number>>; cols: { key: string; label: string; money?: boolean }[] }) {
-  const entries = Object.entries(totals);
-  if (entries.length === 0) return null;
+  // Always show PHP and USD blocks side by side (zeros when idle); never converted or summed.
+  const fold = (key: string, cur: "PHP" | "USD") => {
+    const flat: Record<string, number> = {};
+    for (const [c, t] of Object.entries(totals)) flat[c] = t[key] ?? 0;
+    const p = toPhpUsd(flat);
+    return cur === "USD" ? p.usd : p.php;
+  };
   return (
-    <div className="space-y-2">
-      {entries.map(([cur, t]) => (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {(["PHP", "USD"] as const).map((cur) => (
         <div key={cur} className="rounded-xl border border-white/10 bg-[#0c162c66] p-3">
           <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">{cur}</div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {cols.map((c) => (
-              <div key={c.key}>
-                <div className="text-[10px] uppercase tracking-wide text-slate-400">{c.label}</div>
-                <div className="text-sm font-extrabold">{c.money === false ? String(t[c.key] ?? 0) : formatMoney(t[c.key] ?? 0, cur)}</div>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 gap-2">
+            {cols.map((c) => {
+              const v = fold(c.key, cur);
+              return (
+                <div key={c.key}>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">{c.label}</div>
+                  <div className={`text-sm font-extrabold ${v === 0 ? "opacity-50" : ""}`}>{c.money === false ? String(v) : formatMoney(v, cur)}</div>
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}

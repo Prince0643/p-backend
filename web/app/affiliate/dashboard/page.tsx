@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { useAffiliateAuth } from "@/lib/useAffiliateAuth";
 import { useToast } from "@/lib/useToast";
-import { formatMoney } from "@/lib/money";
+import { MoneyPair } from "@/components/MoneyPair";
+import { formatMoney, pickPhpUsd } from "@/lib/money";
 import { Toast } from "@/components/Toast";
 import { BrandMark } from "@/components/BrandMark";
 
@@ -202,19 +203,26 @@ export default function AffiliateDashboardPage() {
         </div>
       )}
 
-      {totalsByCurrency && Object.keys(totalsByCurrency).length > 0 ? (
+      {totalsByCurrency ? (
         <div className="mb-6 space-y-4">
-          {Object.entries(totalsByCurrency).map(([currency, totals]) => (
-            <div key={currency}>
-              <h2 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">{currency} Totals</h2>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <StatCard label="Earned" value={money(totals.earned ?? totals.commission ?? 0, currency)} accent />
-                <StatCard label="Paid Out" value={money(totals.paidOut ?? 0, currency)} />
-                <StatCard label="Unpaid" value={money(totals.unpaid ?? 0, currency)} />
-                <StatCard label="Sales" value={money(totals.sales, currency)} />
+          {(["PHP", "USD"] as const).map((currency) => {
+            const pick = (f: keyof CurrencyTotals) => {
+              const p = pickPhpUsd(totalsByCurrency, f);
+              return currency === "USD" ? p.usd : p.php;
+            };
+            const earnedField = Object.values(totalsByCurrency).some((t) => t.earned != null) ? "earned" : "commission";
+            return (
+              <div key={currency}>
+                <h2 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">{currency} Totals</h2>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <StatCard label="Earned" value={money(pick(earnedField), currency)} accent />
+                  <StatCard label="Paid Out" value={money(pick("paidOut"), currency)} />
+                  <StatCard label="Unpaid" value={money(pick("unpaid"), currency)} />
+                  <StatCard label="Sales" value={money(pick("sales"), currency)} />
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -230,11 +238,8 @@ export default function AffiliateDashboardPage() {
             <span className="mr-2 rounded-full border border-fuchsia-300/40 px-2 py-0.5 text-[10px]">TEST</span>
             Test orders - not payable
           </div>
-          {Object.entries(testTotals).map(([currency, t]) => (
-            <div key={currency}>
-              {money(t.sales, currency)} test sales · {money(t.commission, currency)} test commission (not included in your earnings)
-            </div>
-          ))}
+          <div>Test sales: <MoneyPair value={pickPhpUsd(testTotals, "sales")} /></div>
+          <div>Test commission: <MoneyPair value={pickPhpUsd(testTotals, "commission")} /> (not included in your earnings)</div>
         </div>
       )}
 

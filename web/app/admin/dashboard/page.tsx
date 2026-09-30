@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
-import { formatMoney } from "@/lib/money";
+import { MoneyPair } from "@/components/MoneyPair";
+import { formatMoney, toPhpUsd } from "@/lib/money";
 import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
 
@@ -100,11 +101,11 @@ function sumByCurrency<T extends { currency?: string }>(rows: T[], pick: (row: T
   return totals;
 }
 
-function formatByCurrency(totals: Record<string, number>): string {
-  const entries = Object.entries(totals);
-  if (entries.length === 0) return money(0);
-  return entries.map(([currency, value]) => money(value, currency)).join(" · ");
-}
+const isUsd = (r: { currency?: string }) => r.currency === "USD";
+const countSplit = (rows: { currency?: string }[]) => {
+  const usd = rows.filter(isUsd).length;
+  return { php: rows.length - usd, usd };
+};
 
 function shortDate(value: string | null) {
   if (!value) return "Not paid";
@@ -261,14 +262,14 @@ export default function AdminDashboardPage() {
     const activeCoupons = data.coupons.filter((c) => c.active);
     // Local (PayMongo/PHP) and global (GHL/USD) redemptions now share this ledger, so
     // sums are kept per-currency rather than added together (₱ + $ has no meaning).
-    const weeklyRevenue = sumByCurrency(weeklyPaid, (r) => r.baseAmount);
-    const weeklyCommission = sumByCurrency(weeklyPaid, (r) => r.affiliateFeeAmount);
-    const totalCommission = sumByCurrency(paid, (r) => r.affiliateFeeAmount);
+    const weeklyRevenue = toPhpUsd(sumByCurrency(weeklyPaid, (r) => r.baseAmount));
+    const weeklyCommission = toPhpUsd(sumByCurrency(weeklyPaid, (r) => r.affiliateFeeAmount));
+    const totalCommission = toPhpUsd(sumByCurrency(paid, (r) => r.affiliateFeeAmount));
     // Per-currency (Academy/Clockistry are PHP, GHL orders are USD) and never counting GHL test-mode orders.
-    const solutionRevenue = sumByCurrency(
+    const solutionRevenue = toPhpUsd(sumByCurrency(
       data.transactions.filter((t) => !t.isTest && (t.status === "completed" || t.status === "paid")),
       (t) => Number(t.amount || 0)
-    );
+    ));
 
     return {
       activeAffiliates: activeAffiliates.length,
@@ -292,24 +293,26 @@ export default function AdminDashboardPage() {
         );
         const redemptions = all.filter((r) => !r.isTest);
         const testPaid = all.filter((r) => r.isTest && r.status === "paid");
-        const testCommission = sumByCurrency(testPaid, (r) => r.affiliateFeeAmount);
+        const testCommission = toPhpUsd(sumByCurrency(testPaid, (r) => r.affiliateFeeAmount));
         const paid = redemptions.filter((r) => {
           const paidMs = new Date(r.paidAt || r.createdAt).getTime();
           return r.status === "paid" && paidMs >= period.periodStartMs && paidMs < period.periodEndMs;
         });
-        const revenue = sumByCurrency(paid, (r) => r.baseAmount);
-        const commission = sumByCurrency(paid, (r) => r.affiliateFeeAmount);
+        const revenue = toPhpUsd(sumByCurrency(paid, (r) => r.baseAmount));
+        const commission = toPhpUsd(sumByCurrency(paid, (r) => r.affiliateFeeAmount));
         return {
           ...affiliate,
           redemptions: redemptions.length,
           paidRedemptions: paid.length,
           revenue,
           commission,
+          paidSplit: countSplit(paid),
           testSales: testPaid.length,
+          testSplit: countSplit(testPaid),
           testCommission,
           // Sort-only heuristic: raw sum across currencies (never rendered) just to
           // order the table, since ranking still needs a single comparable number.
-          commissionSortValue: Object.values(commission).reduce((sum, v) => sum + v, 0),
+          commissionSortValue: commission.php + commission.usd,
         };
       })
       .filter((row) => {
@@ -351,8 +354,8 @@ export default function AdminDashboardPage() {
             </div>
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <Metric label="Weekly sales" value={String(stats.weeklySales)} detail={`${formatByCurrency(stats.weeklyRevenue)} revenue`} />
-              <Metric label="Weekly commission" value={formatByCurrency(stats.weeklyCommission)} detail={`${formatByCurrency(stats.totalCommission)} all time`} />
+              <Metric label="Weekly sales" value={String(stats.weeklySales)} detail={<><MoneyPair value={stats.weeklyRevenue} /> revenue</>} />
+              <Metric label="Weekly commission" value={<MoneyPair value={stats.weeklyCommission} stacked className="text-xl" />} detail={<><MoneyPair value={stats.totalCommission} /> all time</>} />
               <Metric label="Active affiliates" value={String(stats.activeAffiliates)} detail={`${data.affiliates.length} total registered`} />
               <Metric label="Active coupons" value={String(stats.activeCoupons)} detail={`${stats.pendingHolds} pending holds`} />
             </div>
@@ -387,14 +390,14 @@ export default function AdminDashboardPage() {
               </div>
               <div>
                 <div className="text-slate-400">Solution revenue</div>
-                <div className="mt-1 text-lg font-extrabold">{formatByCurrency(stats.solutionRevenue)}</div>
+                <div className="mt-1 text-lg font-extrabold"><MoneyPair value={stats.solutionRevenue} /></div>
               </div>
             </div>
           </div>
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[1fr_.8fr]">
-          <div className="rounded-2xl border border-white/10 bg-white/[.035] shadow-2xl">
+          <div className="min-w-0 rounded-2xl border border-white/10 bg-white/[.035] shadow-2xl">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
               <div>
                 <h2 className="text-sm font-extrabold uppercase tracking-wide text-slate-100">Affiliate performance</h2>
@@ -408,15 +411,21 @@ export default function AdminDashboardPage() {
               />
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[780px] text-left text-sm">
+              <table className="w-full min-w-[980px] text-left text-sm">
                 <thead className="border-b border-white/10 bg-white/[.025] text-xs uppercase tracking-wide text-slate-400">
                   <tr>
-                    <th className="p-3">Affiliate</th>
-                    <th className="p-3">Coupon</th>
-                    <th className="p-3">Status</th>
-                    <th className="p-3 text-right">Sales</th>
-                    <th className="p-3 text-right">Revenue</th>
-                    <th className="p-3 text-right">Commission</th>
+                    <th className="p-3" rowSpan={2}>Affiliate</th>
+                    <th className="p-3" rowSpan={2}>Coupon</th>
+                    <th className="p-3" rowSpan={2}>Status</th>
+                    <th className="p-3 text-right" rowSpan={2}>Sales</th>
+                    <th className="p-3 text-center" colSpan={2}>Revenue</th>
+                    <th className="p-3 text-center" colSpan={2}>Commission</th>
+                  </tr>
+                  <tr className="text-[10px]">
+                    <th className="px-3 pb-2 text-right">₱ PHP</th>
+                    <th className="px-3 pb-2 text-right">$ USD</th>
+                    <th className="px-3 pb-2 text-right">₱ PHP</th>
+                    <th className="px-3 pb-2 text-right">$ USD</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -432,22 +441,21 @@ export default function AdminDashboardPage() {
                           {row.status}
                         </span>
                       </td>
-                      <td className="p-3 text-right font-bold">{row.paidRedemptions}</td>
-                      <td className="p-3 text-right">{formatByCurrency(row.revenue)}</td>
-                      <td className="p-3 text-right font-extrabold text-emerald-200">
-                        {formatByCurrency(row.commission)}
-                        {row.testSales > 0 && (
-                          <div className="mt-1 text-xs font-bold text-fuchsia-200">
-                            <span className="mr-1 rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-1.5 py-0.5 text-[10px] uppercase">TEST</span>
-                            {row.testSales} test sale{row.testSales === 1 ? "" : "s"} · {formatByCurrency(row.testCommission)} test commission
-                          </div>
+                      <td className="p-3 text-right font-bold">
+                        {row.paidRedemptions}
+                        {row.paidSplit.php > 0 && row.paidSplit.usd > 0 && (
+                          <div className="text-xs font-normal text-slate-400">{row.paidSplit.php} ₱ · {row.paidSplit.usd} $</div>
                         )}
                       </td>
+                      <MoneyCell amount={row.revenue.php} currency="PHP" />
+                      <MoneyCell amount={row.revenue.usd} currency="USD" />
+                      <MoneyCell amount={row.commission.php} currency="PHP" strong test={{ sales: row.testSplit.php, amount: row.testCommission.php }} />
+                      <MoneyCell amount={row.commission.usd} currency="USD" strong test={{ sales: row.testSplit.usd, amount: row.testCommission.usd }} />
                     </tr>
                   ))}
                   {affiliateRows.length === 0 && (
                     <tr>
-                      <td className="p-6 text-center text-slate-400" colSpan={6}>No affiliates match the current search.</td>
+                      <td className="p-6 text-center text-slate-400" colSpan={8}>No affiliates match the current search.</td>
                     </tr>
                   )}
                 </tbody>
@@ -495,7 +503,7 @@ export default function AdminDashboardPage() {
           <QuickLink href="/admin/products" label="Products" value={`${data.products.length} catalog items`} />
           <QuickLink href="/admin/coupons" label="Coupons" value={`${data.coupons.length} total codes`} />
           <QuickLink href="/admin/affiliates" label="Affiliates" value={`${stats.activeAffiliates} active`} />
-          <QuickLink href="/admin/solutions" label="Solutions" value={formatByCurrency(stats.solutionRevenue)} />
+          <QuickLink href="/admin/solutions" label="Solutions" value={<MoneyPair value={stats.solutionRevenue} />} />
         </section>
       </main>
       <Toast message={message} />
@@ -503,7 +511,7 @@ export default function AdminDashboardPage() {
   );
 }
 
-function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
+function Metric({ label, value, detail }: { label: string; value: React.ReactNode; detail: React.ReactNode }) {
   return (
     <div className="rounded-xl border border-white/10 bg-[#08101ee6] p-4">
       <div className="text-xs font-bold uppercase tracking-wide text-slate-400">{label}</div>
@@ -522,11 +530,31 @@ function CountdownUnit({ label, value }: { label: string; value: number }) {
   );
 }
 
-function QuickLink({ href, label, value }: { href: string; label: string; value: string }) {
+function QuickLink({ href, label, value }: { href: string; label: string; value: React.ReactNode }) {
   return (
     <Link href={href} className="rounded-2xl border border-white/10 bg-white/[.035] p-4 shadow-2xl hover:bg-white/[.06]">
       <div className="text-xs font-bold uppercase tracking-wide text-slate-400">{label}</div>
       <div className="mt-2 text-lg font-extrabold text-white">{value}</div>
     </Link>
+  );
+}
+
+// One currency cell of the affiliate table: muted dash when there is no activity, plus the
+// TEST sub-line (not part of the live figure) for this currency when test sales exist.
+function MoneyCell({ amount, currency, strong = false, test }: { amount: number; currency: string; strong?: boolean; test?: { sales: number; amount: number } }) {
+  return (
+    <td className="p-3 text-right">
+      {amount === 0 ? (
+        <span className="text-slate-500">—</span>
+      ) : (
+        <span className={strong ? "font-extrabold text-emerald-200" : ""}>{formatMoney(amount, currency)}</span>
+      )}
+      {test && test.sales > 0 && (
+        <div className="mt-1 text-xs font-bold text-fuchsia-200">
+          <span className="mr-1 rounded-full border border-fuchsia-300/40 bg-fuchsia-400/10 px-1.5 py-0.5 text-[10px] uppercase">TEST</span>
+          {test.sales} test sale{test.sales === 1 ? "" : "s"} · {formatMoney(test.amount, currency)}
+        </div>
+      )}
+    </td>
   );
 }

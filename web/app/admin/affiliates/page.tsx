@@ -6,7 +6,8 @@ import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
-import { formatMoney } from "@/lib/money";
+import { MoneyPair } from "@/components/MoneyPair";
+import { formatMoney, pickPhpUsd } from "@/lib/money";
 
 type Affiliate = {
   id: string;
@@ -282,22 +283,16 @@ export default function AffiliatesPage() {
                   Manage in Coupons →
                 </a>
               </DetailCard>
-              {totals && Object.keys(totals).length > 0 && (
-                <DetailCard label="Sales & commission">
-                  {Object.entries(totals).map(([cur, t]) => (
-                    <div key={cur}>
-                      {cur}: {formatMoney(t.sales ?? 0, cur)} sales · {formatMoney(t.commission ?? 0, cur)} commission
-                    </div>
-                  ))}
-                </DetailCard>
-              )}
+              <DetailCard label="Sales & commission">
+                <div>Sales: <MoneyPair value={pickPhpUsd(totals, "sales")} /></div>
+                <div>Commission: <MoneyPair value={pickPhpUsd(totals, "commission")} /></div>
+              </DetailCard>
               {testRedemptions.length > 0 && (
                 <DetailCard label="Test redemptions (not payable)">
-                  {testTotals && Object.entries(testTotals).map(([cur, t]) => (
-                    <div key={cur} className="text-fuchsia-200">
-                      {cur}: {formatMoney(t.sales ?? 0, cur)} test sales · {formatMoney(t.commission ?? 0, cur)} test commission
-                    </div>
-                  ))}
+                  <div className="text-fuchsia-200">
+                    <div>Test sales: <MoneyPair value={pickPhpUsd(testTotals, "sales")} /></div>
+                    <div>Test commission: <MoneyPair value={pickPhpUsd(testTotals, "commission")} /></div>
+                  </div>
                   <div className="mt-1 space-y-1">
                     {testRedemptions.map((r) => (
                       <div key={r.id} className="text-xs">

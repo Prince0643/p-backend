@@ -18,6 +18,7 @@ const adminCampaignSiteRoutes = require('./routes/adminCampaignSites');
 const affiliateRoutes = require('./routes/affiliates');
 const adminAffiliateRoutes = require('./routes/adminAffiliates');
 const adminSolutionsRoutes = require('./routes/adminSolutions');
+const adminSettingsRoutes = require('./routes/adminSettings');
 const adminAuthRoutes = require('./routes/adminAuth');
 
 const app = express();
@@ -114,6 +115,7 @@ app.use('/api/admin', adminCampaignSiteRoutes);
 app.use('/api/affiliates', affiliateRoutes);
 app.use('/api/admin', adminAffiliateRoutes);
 app.use('/api/admin', adminSolutionsRoutes);
+app.use('/api/admin', adminSettingsRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -139,6 +141,7 @@ if (hasExportedWebApp) {
         '/admin/campaign-sites',
         '/admin/affiliates',
         '/admin/solutions',
+        '/admin/settings',
         '/admin/test-checkout',
         '/affiliate/login',
         '/affiliate/dashboard'

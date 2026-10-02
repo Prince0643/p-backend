@@ -10,6 +10,7 @@ const NAV = [
   { href: "/admin/campaign-sites", label: "Sites" },
   { href: "/admin/affiliates", label: "Affiliates" },
   { href: "/admin/solutions", label: "Solutions" },
+  { href: "/admin/settings", label: "Settings" },
   { href: "/admin/admins", label: "Admins" },
 ];
 

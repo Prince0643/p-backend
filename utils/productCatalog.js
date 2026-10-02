@@ -1,4 +1,5 @@
 const pool = require('../db/pool');
+const { normalizeLegalUrl } = require('./legalLinks');
 
 function toSlugId(input) {
     return String(input || '')
@@ -36,6 +37,9 @@ function normalizeProductInput(product) {
         throw new Error('billing.interval must be "monthly" for recurring products');
     }
 
+    const termsUrl = normalizeLegalUrl(defaults.termsUrl, 'defaults.termsUrl');
+    const privacyUrl = normalizeLegalUrl(defaults.privacyUrl, 'defaults.privacyUrl');
+
     if (!id) throw new Error('Product id is required');
     if (!name) throw new Error('Product name is required');
     if (!Number.isFinite(amountPhp) || amountPhp <= 0) throw new Error('amountPhp must be a positive number');
@@ -65,7 +69,9 @@ function normalizeProductInput(product) {
         taxRate,
         displaySuffix: defaults.displaySuffix ? String(defaults.displaySuffix) : '',
         successUrl: successUrl || null,
-        cancelUrl: cancelUrl || null
+        cancelUrl: cancelUrl || null,
+        termsUrl,
+        privacyUrl
     };
 }
 
@@ -85,7 +91,9 @@ function rowToProduct(row) {
             taxRate: row.default_tax_rate != null ? Number(row.default_tax_rate) : undefined,
             displaySuffix: row.display_suffix || '',
             successUrl: row.success_url || undefined,
-            cancelUrl: row.cancel_url || undefined
+            cancelUrl: row.cancel_url || undefined,
+            termsUrl: row.terms_url || undefined,
+            privacyUrl: row.privacy_url || undefined
         }
     };
 }
@@ -108,12 +116,12 @@ async function findProduct({ productId, productName }) {
     return null;
 }
 
-const PRODUCT_COLUMNS = ['id', 'name', 'amount_php', 'currency', 'billing_type', 'billing_interval', 'default_payment_method', 'default_source', 'default_tax_rate', 'display_suffix', 'success_url', 'cancel_url'];
+const PRODUCT_COLUMNS = ['id', 'name', 'amount_php', 'currency', 'billing_type', 'billing_interval', 'default_payment_method', 'default_source', 'default_tax_rate', 'display_suffix', 'success_url', 'cancel_url', 'terms_url', 'privacy_url'];
 
 function productParams(p) {
     return [
         p.id, p.name, p.amountPhp, p.currency, p.billingType, p.billingInterval,
-        p.paymentMethod, p.source, p.taxRate, p.displaySuffix, p.successUrl, p.cancelUrl
+        p.paymentMethod, p.source, p.taxRate, p.displaySuffix, p.successUrl, p.cancelUrl, p.termsUrl, p.privacyUrl
     ];
 }
 
@@ -121,8 +129,8 @@ async function upsertProduct(payload) {
     const p = normalizeProductInput(payload);
 
     await pool.query(
-        `INSERT INTO products (id, name, amount_php, currency, billing_type, billing_interval, default_payment_method, default_source, default_tax_rate, display_suffix, success_url, cancel_url, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+        `INSERT INTO products (id, name, amount_php, currency, billing_type, billing_interval, default_payment_method, default_source, default_tax_rate, display_suffix, success_url, cancel_url, terms_url, privacy_url, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
          ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             amount_php = EXCLUDED.amount_php,
@@ -135,6 +143,8 @@ async function upsertProduct(payload) {
             display_suffix = EXCLUDED.display_suffix,
             success_url = EXCLUDED.success_url,
             cancel_url = EXCLUDED.cancel_url,
+            terms_url = EXCLUDED.terms_url,
+            privacy_url = EXCLUDED.privacy_url,
             updated_at = now()`,
         productParams(p)
     );
@@ -147,7 +157,7 @@ async function createProduct(payload) {
     const p = normalizeProductInput(payload);
     const { rowCount } = await pool.query(
         `INSERT INTO products (${PRODUCT_COLUMNS.join(', ')}, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
          ON CONFLICT (id) DO NOTHING`,
         productParams(p)
     );
@@ -166,7 +176,8 @@ async function updateProduct(id, payload) {
         `UPDATE products SET
             name = $2, amount_php = $3, currency = $4, billing_type = $5, billing_interval = $6,
             default_payment_method = $7, default_source = $8, default_tax_rate = $9,
-            display_suffix = $10, success_url = $11, cancel_url = $12, updated_at = now()
+            display_suffix = $10, success_url = $11, cancel_url = $12,
+            terms_url = $13, privacy_url = $14, updated_at = now()
          WHERE id = $1`,
         productParams(p)
     );

@@ -317,3 +317,18 @@ CREATE INDEX IF NOT EXISTS idx_ghl_student_users_email_lower ON ghl_student_user
 ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS paymongo_payment_intent_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_dst_paymongo_payment_intent_id ON digital_solutions_transactions(paymongo_payment_intent_id);
 ALTER TABLE ghl_student_users ADD COLUMN IF NOT EXISTS is_test BOOLEAN NOT NULL DEFAULT false;
+
+-- Checkout legal links (Terms & Conditions / Privacy Policy). A global default lives in the
+-- app_settings key-value table (keys terms_url, privacy_url); a product may override either
+-- link. The embed widget asks for consent when a link resolves, and the exact links shown plus
+-- the acceptance time are stored on the transaction for audit.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key                     TEXT PRIMARY KEY,
+    value                   TEXT,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS terms_url TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS privacy_url TEXT;
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS terms_url TEXT;
+ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS privacy_url TEXT;

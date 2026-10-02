@@ -31,7 +31,11 @@ function rowToTransaction(row, { withRaw = false } = {}) {
         ghlLocationId: row.ghl_location_id || undefined,
         ghlProductIds: row.type === 'ghl_order' ? ghlProductIds : undefined,
         ghlPaymentStatus: row.ghl_payment_status || undefined,
-        ghlOrderId: row.type === 'ghl_order' ? String(row.transaction_id).replace(/^ghl:/, '') : undefined
+        ghlOrderId: row.type === 'ghl_order' ? String(row.transaction_id).replace(/^ghl:/, '') : undefined,
+        // Legal consent captured at embed checkout (links are the exact ones resolved at that time).
+        termsAcceptedAt: row.terms_accepted_at ? new Date(row.terms_accepted_at).toISOString() : undefined,
+        termsUrl: row.terms_url || undefined,
+        privacyUrl: row.privacy_url || undefined
     };
     if (withRaw) transaction.raw = row.raw || undefined;
     return transaction;
@@ -48,8 +52,8 @@ async function recordTransaction(entry) {
 
     const { rows } = await pool.query(
         `INSERT INTO digital_solutions_transactions
-            (id, type, transaction_id, customer_email, customer_name, company_id, user_id, product_id, product_name, plan, user_count, amount, currency, promo_code, source, status, is_test, paymongo_payment_intent_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+            (id, type, transaction_id, customer_email, customer_name, company_id, user_id, product_id, product_name, plan, user_count, amount, currency, promo_code, source, status, is_test, paymongo_payment_intent_id, terms_accepted_at, terms_url, privacy_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
          RETURNING *`,
         [
             id, entry.type, String(entry.transactionId || ''),
@@ -67,7 +71,10 @@ async function recordTransaction(entry) {
             entry.source ? String(entry.source) : null,
             entry.status || 'initiated',
             Boolean(entry.isTest),
-            entry.paymongoPaymentIntentId ? String(entry.paymongoPaymentIntentId) : null
+            entry.paymongoPaymentIntentId ? String(entry.paymongoPaymentIntentId) : null,
+            entry.termsAcceptedAt || null,
+            entry.termsUrl || null,
+            entry.privacyUrl || null
         ]
     );
     return rowToTransaction(rows[0]);

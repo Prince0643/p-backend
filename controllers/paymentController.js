@@ -253,6 +253,17 @@ exports.createPaymentIntent = async (req, res) => {
             timestamp: new Date().toISOString()
         };
 
+        // Legal consent captured by the embed checkout (req.legalConsent is set server-side
+        // only). The exact links are kept in the transaction row; they go into metadata only
+        // when short enough for PayMongo's metadata values.
+        const legalConsent = req.legalConsent || null;
+        if (legalConsent) {
+            flattenedMetadata.terms_accepted = 'true';
+            flattenedMetadata.terms_accepted_at = legalConsent.acceptedAt;
+            if (legalConsent.termsUrl && legalConsent.termsUrl.length <= 255) flattenedMetadata.terms_url = legalConsent.termsUrl;
+            if (legalConsent.privacyUrl && legalConsent.privacyUrl.length <= 255) flattenedMetadata.privacy_url = legalConsent.privacyUrl;
+        }
+
         // Remove any empty values that PayMongo might reject
         Object.keys(flattenedMetadata).forEach(key => {
             if (flattenedMetadata[key] === '' || flattenedMetadata[key] === 'undefined' || flattenedMetadata[key] === 'null') {
@@ -334,7 +345,10 @@ exports.createPaymentIntent = async (req, res) => {
             source,
             status: 'initiated',
             isTest,
-            paymongoPaymentIntentId: paymentIntent.id
+            paymongoPaymentIntentId: paymentIntent.id,
+            termsAcceptedAt: legalConsent?.acceptedAt,
+            termsUrl: legalConsent?.termsUrl,
+            privacyUrl: legalConsent?.privacyUrl
         });
 
         // Send to LeadConnector webhook - include paymentMethod and source

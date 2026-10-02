@@ -28,6 +28,9 @@ type Transaction = {
   ghlOrderId?: string;
   ghlPaymentStatus?: string;
   raw?: GhlRaw;
+  termsAcceptedAt?: string;
+  termsUrl?: string;
+  privacyUrl?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -77,6 +80,31 @@ function StudentAudit({ student }: { student: StudentUser | null }) {
           <div className="text-slate-500">Updated: {new Date(student.updatedAt).toLocaleString()}</div>
         </>
       )}
+    </div>
+  );
+}
+
+function ConsentAudit({ transaction: t }: { transaction: Transaction }) {
+  if (!t.termsAcceptedAt) return null;
+  return (
+    <div className="space-y-1 text-xs">
+      <div className="font-bold uppercase tracking-wide text-slate-300">Legal consent</div>
+      <div>
+        Terms accepted &middot; {new Date(t.termsAcceptedAt).toLocaleString()}
+        {t.termsUrl && (
+          <>
+            {" "}&middot;{" "}
+            <a className="underline" href={t.termsUrl} target="_blank" rel="noopener noreferrer">T&amp;C link</a>
+          </>
+        )}
+        {t.privacyUrl && (
+          <>
+            {" "}&middot;{" "}
+            <a className="underline" href={t.privacyUrl} target="_blank" rel="noopener noreferrer">Privacy link</a>
+          </>
+        )}
+      </div>
+      <div className="text-slate-500">Links are the ones shown to the buyer at checkout.</div>
     </div>
   );
 }
@@ -405,7 +433,10 @@ export default function SolutionsPage() {
                             detail.transaction.type === "ghl_order" ? (
                               <GhlAudit transaction={detail.transaction} redemption={detail.redemption} onCopied={() => toast("Order ID copied.")} />
                             ) : (
-                              <StudentAudit student={detail.student} />
+                              <div className="space-y-3">
+                                <StudentAudit student={detail.student} />
+                                <ConsentAudit transaction={detail.transaction} />
+                              </div>
                             )
                           ) : (
                             <span className="text-slate-400">Loading…</span>

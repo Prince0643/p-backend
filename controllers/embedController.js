@@ -1,6 +1,7 @@
 // controllers/embedController.js
 // Public embed API. Never trusts client pricing or redirect URLs.
 const { findProduct } = require('../utils/productCatalog');
+const { resolveLegalLinks } = require('../utils/legalLinks');
 const couponStore = require('../utils/couponStore');
 const { computePricing } = require('../utils/pricing');
 const { createPaymentIntent } = require('./paymentController');
@@ -29,6 +30,7 @@ exports.getProduct = async (req, res) => {
         const found = await lookupProduct(req.params.id);
         if (found.error) return res.status(found.status).json({ error: found.error });
         const { product } = found;
+        const { termsUrl, privacyUrl } = await resolveLegalLinks(product);
         res.json({
             product: {
                 id: product.id,
@@ -37,7 +39,9 @@ exports.getProduct = async (req, res) => {
                 amountPhp: product.amountPhp,
                 taxRate: computePricing({ product, source: product.defaults.source }).taxRate,
                 billing: billingOf(product),
-                displaySuffix: product.defaults.displaySuffix || ''
+                displaySuffix: product.defaults.displaySuffix || '',
+                termsUrl,
+                privacyUrl
             }
         });
     } catch (err) {
@@ -111,6 +115,16 @@ exports.checkout = async (req, res) => {
         if (!product) {
             return res.status(400).json({ error: 'Invalid product. Add it in /admin/products first.' });
         }
+        // Consent is required whenever any legal link resolves for this product. The links are
+        // resolved here (never taken from the client) so the audit record holds what was shown.
+        const { termsUrl, privacyUrl } = await resolveLegalLinks(product);
+        const consentRequired = Boolean(termsUrl || privacyUrl);
+        if (consentRequired && body.termsAccepted !== true) {
+            const what = termsUrl && privacyUrl ? 'the Terms and Conditions and Privacy Policy' : termsUrl ? 'the Terms and Conditions' : 'the Privacy Policy';
+            return res.status(400).json({ error: `Please agree to ${what} to continue.` });
+        }
+        // Server-set (never read from the request body) so direct API callers cannot forge it.
+        req.legalConsent = consentRequired ? { acceptedAt: new Date().toISOString(), termsUrl, privacyUrl } : null;
         req.body = {
             fullName: str(body.fullName, 200),
             email: str(body.email, 254),

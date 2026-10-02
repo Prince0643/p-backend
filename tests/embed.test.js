@@ -11,13 +11,16 @@ const paymongoService = require('../services/paymongoService');
 const productCatalog = require('../utils/productCatalog');
 const { resolveTaxRate } = require('../utils/pricing');
 const { createTestCoupon, cleanupCoupon } = require('./fixtures');
+const legalLinks = require('../utils/legalLinks');
 
 const ADMIN_KEY = process.env.ADMIN_API_KEY;
 const SUFFIX = Date.now().toString(36);
 const ids = {
     zero: `embed_zero_${SUFFIX}`,
     legacy: `embed_legacy_${SUFFIX}`,
-    recurring: `embed_recurring_${SUFFIX}`
+    recurring: `embed_recurring_${SUFFIX}`,
+    legalBoth: `embed_legal_both_${SUFFIX}`,
+    legalTerms: `embed_legal_terms_${SUFFIX}`
 };
 const createdProductIds = new Set(Object.values(ids));
 
@@ -29,8 +32,11 @@ const checkoutBody = (overrides = {}) => ({
 // PayMongo is stubbed: no test in this file may reach the network.
 const realCreateIntent = paymongoService.createPaymentIntent;
 let intentCalls = [];
+// Global legal links as found in the DB; restored after the suite.
+let savedGlobalLinks = { termsUrl: null, privacyUrl: null };
 
 before(async () => {
+    savedGlobalLinks = await legalLinks.getGlobalLegalLinks();
     paymongoService.createPaymentIntent = async (args) => {
         intentCalls.push(args);
         return { id: `pi_test_${intentCalls.length}`, attributes: { checkout_url: 'https://checkout.example/test', client_secret: 'cs_test' } };
@@ -42,6 +48,7 @@ before(async () => {
 
 after(async () => {
     paymongoService.createPaymentIntent = realCreateIntent;
+    await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
     for (const id of createdProductIds) {
         await pool.query('DELETE FROM digital_solutions_transactions WHERE product_id = $1', [id]).catch(() => {});
         await pool.query('DELETE FROM products WHERE id = $1', [id]);
@@ -67,7 +74,7 @@ test('GET /api/embed/products/:id returns only the public fields; unknown id is 
     assert.deepEqual(res.body, {
         product: {
             id: ids.zero, name: 'Embed Zero Tax', currency: 'PHP', amountPhp: 1000, taxRate: 0,
-            billing: { type: 'one_time', interval: null }, displaySuffix: ' / once'
+            billing: { type: 'one_time', interval: null }, displaySuffix: ' / once', termsUrl: null, privacyUrl: null
         }
     });
     const missing = await request(app).get('/api/embed/products/nope_nope');
@@ -272,4 +279,198 @@ test('GET /public/nx-embed.js is served cross-origin with a JS content type', as
     assert.equal(res.headers['cross-origin-resource-policy'], 'cross-origin');
     assert.match(res.headers['content-type'], /application\/javascript/);
     assert.equal(res.headers['cache-control'], 'public, max-age=300');
+});
+
+// ---- Terms & Privacy consent ------------------------------------------------------------
+// These tests mutate the shared global legal links, so they live in this file (tests in a file
+// run sequentially) and always restore the links they change.
+const TERMS = 'https://legal.example.com/terms';
+const PRIVACY = 'https://legal.example.com/privacy';
+const putSettings = (body) => request(app).put('/api/admin/settings').set('x-api-key', ADMIN_KEY).send(body);
+const clearGlobals = () => putSettings({ termsUrl: '', privacyUrl: null });
+const txRow = async (paymentReference) =>
+    (await pool.query('SELECT * FROM digital_solutions_transactions WHERE transaction_id = $1', [paymentReference])).rows[0];
+
+test('settings API: requires admin auth; GET returns the two links', async () => {
+    assert.equal((await request(app).get('/api/admin/settings')).status, 401);
+    assert.equal((await request(app).put('/api/admin/settings').send({ termsUrl: TERMS })).status, 401);
+    const res = await request(app).get('/api/admin/settings').set('x-api-key', ADMIN_KEY);
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(res.body.settings).sort(), ['privacyUrl', 'termsUrl']);
+});
+
+test('settings API: validates URLs (400, nothing saved), trims, supports partial update and clearing', async () => {
+    try {
+        await clearGlobals();
+        for (const bad of ['ftp://x.example.com/t', 'javascript:alert(1)', '/relative/terms', 'not a url', 'https://', `https://x.example.com/${'a'.repeat(2048)}`, 123, {}]) {
+            const res = await putSettings({ termsUrl: TERMS, privacyUrl: bad });
+            assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(bad).slice(0, 40)}`);
+        }
+        assert.deepEqual((await legalLinks.getGlobalLegalLinks()), { termsUrl: null, privacyUrl: null }, 'a rejected PUT must not save the valid half');
+
+        const saved = await putSettings({ termsUrl: `  ${TERMS}  `, privacyUrl: PRIVACY });
+        assert.equal(saved.status, 200, JSON.stringify(saved.body));
+        assert.deepEqual(saved.body.settings, { termsUrl: TERMS, privacyUrl: PRIVACY });
+        assert.deepEqual((await request(app).get('/api/admin/settings').set('x-api-key', ADMIN_KEY)).body.settings, { termsUrl: TERMS, privacyUrl: PRIVACY });
+
+        const partial = await putSettings({ privacyUrl: null });
+        assert.deepEqual(partial.body.settings, { termsUrl: TERMS, privacyUrl: null });
+        const cleared = await putSettings({ termsUrl: '   ' });
+        assert.deepEqual(cleared.body.settings, { termsUrl: null, privacyUrl: null });
+    } finally {
+        await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
+    }
+});
+
+test('product legal links: validated, stored, exposed in defaults, and clearable', async () => {
+    const bad = await request(app).post('/api/admin/products').set('x-api-key', ADMIN_KEY)
+        .send({ name: 'Bad Legal', id: `embed_badlegal_${SUFFIX}`, amountPhp: 10, defaults: { termsUrl: 'ftp://nope.example.com' } });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body.error, /defaults\.termsUrl/);
+
+    const id = `embed_legal_crud_${SUFFIX}`;
+    createdProductIds.add(id);
+    const created = await request(app).post('/api/admin/products').set('x-api-key', ADMIN_KEY)
+        .send({ name: 'Legal Crud', id, amountPhp: 10, defaults: { termsUrl: ` ${TERMS} `, privacyUrl: PRIVACY } });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    assert.equal(created.body.product.defaults.termsUrl, TERMS);
+    assert.equal(created.body.product.defaults.privacyUrl, PRIVACY);
+
+    const cleared = await request(app).put(`/api/admin/products/${id}`).set('x-api-key', ADMIN_KEY)
+        .send({ name: 'Legal Crud', amountPhp: 10, defaults: { termsUrl: '', privacyUrl: PRIVACY } });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.product.defaults.termsUrl, undefined);
+    assert.equal(cleared.body.product.defaults.privacyUrl, PRIVACY);
+});
+
+test('resolveLegalLinks: product overrides global, per link independently', async () => {
+    const global = { termsUrl: 'https://global.example.com/t', privacyUrl: 'https://global.example.com/p' };
+    try {
+        await putSettings(global);
+        const own = (defaults) => ({ id: 'x', defaults });
+        assert.deepEqual(await legalLinks.resolveLegalLinks(own({})), global);
+        assert.deepEqual(await legalLinks.resolveLegalLinks(own({ termsUrl: TERMS })), { termsUrl: TERMS, privacyUrl: global.privacyUrl });
+        assert.deepEqual(await legalLinks.resolveLegalLinks(own({ privacyUrl: PRIVACY })), { termsUrl: global.termsUrl, privacyUrl: PRIVACY });
+        assert.deepEqual(await legalLinks.resolveLegalLinks(own({ termsUrl: TERMS, privacyUrl: PRIVACY })), { termsUrl: TERMS, privacyUrl: PRIVACY });
+        await clearGlobals();
+        assert.deepEqual(await legalLinks.resolveLegalLinks(own({ termsUrl: TERMS })), { termsUrl: TERMS, privacyUrl: null });
+        assert.deepEqual(await legalLinks.resolveLegalLinks(own({})), { termsUrl: null, privacyUrl: null });
+    } finally {
+        await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
+    }
+});
+
+test('no links anywhere: no consent needed, termsAccepted is ignored, nothing recorded', async () => {
+    try {
+        await clearGlobals();
+        const info = await request(app).get(`/api/embed/products/${ids.legacy}`);
+        assert.equal(info.body.product.termsUrl, null);
+        assert.equal(info.body.product.privacyUrl, null);
+
+        intentCalls = [];
+        const res = await request(app).post('/api/embed/checkout').send(checkoutBody());
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        const meta = intentCalls[0].metadata;
+        assert.equal(Object.keys(meta).some((k) => /^(terms_|privacy_)/.test(k)), false);
+        const row = await txRow(res.body.paymentReference);
+        assert.equal(row.terms_accepted_at, null);
+        assert.equal(row.terms_url, null);
+        assert.equal(row.privacy_url, null);
+
+        intentCalls = [];
+        const ignored = await request(app).post('/api/embed/checkout').send(checkoutBody({ termsAccepted: true }));
+        assert.equal(ignored.status, 200);
+        assert.equal(intentCalls[0].metadata.terms_accepted, undefined);
+        assert.equal((await txRow(ignored.body.paymentReference)).terms_accepted_at, null);
+    } finally {
+        await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
+    }
+});
+
+test('embed checkout with product links: 400 without consent, 200 and audit record with consent', async () => {
+    await productCatalog.upsertProduct({ id: ids.legalBoth, name: 'Embed Legal Both', amountPhp: 1000, defaults: { termsUrl: TERMS, privacyUrl: PRIVACY } });
+    await productCatalog.upsertProduct({ id: ids.legalTerms, name: 'Embed Legal Terms', amountPhp: 1000, defaults: { termsUrl: TERMS } });
+    try {
+        await clearGlobals();
+        const info = await request(app).get(`/api/embed/products/${ids.legalBoth}`);
+        assert.equal(info.body.product.termsUrl, TERMS);
+        assert.equal(info.body.product.privacyUrl, PRIVACY);
+
+        intentCalls = [];
+        for (const termsAccepted of [undefined, 'true']) {
+            const res = await request(app).post('/api/embed/checkout').send(checkoutBody({ productId: ids.legalBoth, termsAccepted }));
+            assert.equal(res.status, 400, `termsAccepted=${JSON.stringify(termsAccepted)}`);
+            assert.equal(res.body.error, 'Please agree to the Terms and Conditions and Privacy Policy to continue.');
+        }
+        assert.equal(intentCalls.length, 0, 'no payment intent without consent');
+
+        const before = Date.now();
+        const ok = await request(app).post('/api/embed/checkout').send(checkoutBody({ productId: ids.legalBoth, termsAccepted: true }));
+        assert.equal(ok.status, 200, JSON.stringify(ok.body));
+        assert.equal(intentCalls.length, 1);
+        const meta = intentCalls[0].metadata;
+        assert.equal(meta.terms_accepted, 'true');
+        assert.equal(meta.terms_url, TERMS);
+        assert.equal(meta.privacy_url, PRIVACY);
+        assert.ok(Date.parse(meta.terms_accepted_at) >= before - 1000 && Date.parse(meta.terms_accepted_at) <= Date.now() + 1000);
+
+        const row = await txRow(ok.body.paymentReference);
+        assert.equal(row.terms_url, TERMS);
+        assert.equal(row.privacy_url, PRIVACY);
+        assert.equal(row.terms_accepted_at.toISOString(), meta.terms_accepted_at);
+
+        const detail = await request(app).get(`/api/admin/solutions/${ok.body.paymentReference}`).set('x-api-key', ADMIN_KEY);
+        assert.equal(detail.status, 200);
+        assert.equal(detail.body.transaction.termsAcceptedAt, meta.terms_accepted_at);
+        assert.equal(detail.body.transaction.termsUrl, TERMS);
+        assert.equal(detail.body.transaction.privacyUrl, PRIVACY);
+    } finally {
+        await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
+    }
+});
+
+test('global links apply to products without overrides; the checkout records the links resolved at that moment', async () => {
+    const global = { termsUrl: 'https://global.example.com/t', privacyUrl: 'https://global.example.com/p' };
+    try {
+        await putSettings(global);
+        const info = await request(app).get(`/api/embed/products/${ids.legacy}`);
+        assert.equal(info.body.product.termsUrl, global.termsUrl);
+        assert.equal(info.body.product.privacyUrl, global.privacyUrl);
+
+        // legalTerms overrides only the Terms link; Privacy falls back to the global one
+        intentCalls = [];
+        const ok = await request(app).post('/api/embed/checkout').send(checkoutBody({ productId: ids.legalTerms, termsAccepted: true }));
+        assert.equal(ok.status, 200, JSON.stringify(ok.body));
+        assert.equal(intentCalls[0].metadata.terms_url, TERMS);
+        assert.equal(intentCalls[0].metadata.privacy_url, global.privacyUrl);
+        const row = await txRow(ok.body.paymentReference);
+        assert.equal(row.terms_url, TERMS);
+        assert.equal(row.privacy_url, global.privacyUrl);
+
+        // Single-link wording. The embed checkout limiter allows 15 requests per window, so
+        // checkout calls in this file are kept to a minimum.
+        await putSettings({ termsUrl: '', privacyUrl: global.privacyUrl });
+        const privacyOnly = await request(app).post('/api/embed/checkout').send(checkoutBody());
+        assert.equal(privacyOnly.status, 400);
+        assert.equal(privacyOnly.body.error, 'Please agree to the Privacy Policy to continue.');
+    } finally {
+        await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
+    }
+});
+
+test('legacy create-payment-intent cannot be given a forged consent record', async () => {
+    try {
+        await clearGlobals();
+        intentCalls = [];
+        const res = await request(app).post('/api/payments/create-payment-intent').send({
+            fullName: 'Legacy Caller', email: email(), mobile: '+639171234567', productId: ids.legacy,
+            legalConsent: { acceptedAt: new Date().toISOString(), termsUrl: TERMS, privacyUrl: PRIVACY },
+            termsAccepted: true
+        });
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        assert.equal(Object.keys(intentCalls[0].metadata).some((k) => /^(terms_|privacy_)/.test(k)), false);
+        assert.equal((await txRow(res.body.paymentReference)).terms_accepted_at, null);
+    } finally {
+        await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
+    }
 });

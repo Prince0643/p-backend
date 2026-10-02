@@ -21,6 +21,8 @@ type Product = {
     displaySuffix?: string;
     successUrl?: string;
     cancelUrl?: string;
+    termsUrl?: string;
+    privacyUrl?: string;
   };
 };
 
@@ -35,6 +37,8 @@ const emptyForm = {
   billingType: "one_time",
   successUrl: "",
   cancelUrl: "",
+  termsUrl: "",
+  privacyUrl: "",
 };
 
 function slugify(input: string) {
@@ -86,6 +90,8 @@ export default function ProductsPage() {
       billingType: p?.billing?.type || "one_time",
       successUrl: p?.defaults?.successUrl || "",
       cancelUrl: p?.defaults?.cancelUrl || "",
+      termsUrl: p?.defaults?.termsUrl || "",
+      privacyUrl: p?.defaults?.privacyUrl || "",
     });
   }
 
@@ -122,6 +128,8 @@ export default function ProductsPage() {
         ...(form.displaySuffix ? { displaySuffix: form.displaySuffix } : {}),
         ...(form.successUrl ? { successUrl: form.successUrl } : {}),
         ...(form.cancelUrl ? { cancelUrl: form.cancelUrl } : {}),
+        termsUrl: form.termsUrl.trim(),
+        privacyUrl: form.privacyUrl.trim(),
       },
     };
 
@@ -305,6 +313,14 @@ export default function ProductsPage() {
             <Field label="Cancel URL">
               <input className="input" value={form.cancelUrl}
                 onChange={(e) => setForm({ ...form, cancelUrl: e.target.value })} />
+            </Field>
+            <Field label="Terms & Conditions link (override)" hint="Leave blank to use the global setting (Admin > Settings).">
+              <input className="input" type="url" placeholder="https://" value={form.termsUrl}
+                onChange={(e) => setForm({ ...form, termsUrl: e.target.value })} />
+            </Field>
+            <Field label="Privacy Policy link (override)" hint="Leave blank to use the global setting (Admin > Settings).">
+              <input className="input" type="url" placeholder="https://" value={form.privacyUrl}
+                onChange={(e) => setForm({ ...form, privacyUrl: e.target.value })} />
             </Field>
 
             <div className="col-span-full flex justify-end">

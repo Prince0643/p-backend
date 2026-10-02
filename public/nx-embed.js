@@ -214,6 +214,12 @@
     return { monthly: 'month', yearly: 'year', annually: 'year', weekly: 'week', daily: 'day' }[i] || i;
   }
 
+  // Only plain http(s) links are ever put in an href (the API already validates, this is defence in depth).
+  function safeHref(v) {
+    if (typeof v !== 'string' || !/^https?:\/\//i.test(v.trim())) return null;
+    try { return /^https?:$/.test(new URL(v.trim()).protocol) ? v.trim() : null; } catch (e) { return null; }
+  }
+
   var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
   function validMobile(v) {
     var s = v.replace(/[\s\-().]/g, '');
@@ -292,6 +298,12 @@
       'button.pay{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:48px;font:inherit;font-size:16px;font-weight:650;border:0;border-radius:' + radius + 'px;background:' + accent + ';color:' + onAccent + ';cursor:pointer;padding:12px 16px}',
       'button.pay:hover:not([disabled]){filter:brightness(.93)}',
       'button.pay[disabled]{cursor:not-allowed;opacity:.7}',
+      '.consent{display:flex;align-items:flex-start;gap:10px;margin:0 0 14px}',
+      '.consent input[type="checkbox"]{flex:none;width:22px;height:22px;min-height:0;margin:1px 0 0;padding:0;accent-color:' + accent + ';cursor:pointer}',
+      '.consent label{margin:0;font-size:14px;font-weight:400;color:#1f2937;cursor:pointer}',
+      '.consent a{color:#1d4ed8;text-decoration:underline}',
+      '.consent a:focus-visible{outline:3px solid ' + accent + ';outline-offset:2px;border-radius:2px}',
+      '.consent-err{margin:-8px 0 14px 32px}',
       'button.link{font:inherit;font-size:14px;background:none;border:0;padding:4px 0;color:#1d4ed8;text-decoration:underline;cursor:pointer}',
       '.spin{width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:s .7s linear infinite}',
       '@keyframes s{to{transform:rotate(360deg)}}',
@@ -482,13 +494,24 @@
       check('fullName', name ? '' : 'Please enter your full name.');
       check('email', !email ? 'Please enter your email.' : EMAIL_RE.test(email) ? '' : 'Please enter a valid email address.');
       check('mobile', !mobile ? 'Please enter your mobile number.' : validMobile(mobile) ? '' : 'Enter a valid mobile number, e.g. 09171234567 or +639171234567.');
+      if (state.consent) {
+        var ticked = refs.consent.checked;
+        refs.consentErr.textContent = ticked ? '' : 'Please agree before continuing.';
+        if (ticked) refs.consent.removeAttribute('aria-invalid'); else refs.consent.setAttribute('aria-invalid', 'true');
+        if (!ticked && !first) first = refs.consent;
+      }
       if (first) first.focus();
       return !first;
     }
 
+    // The pay button stays disabled until the (required) consent box is ticked.
+    function syncPayDisabled() {
+      refs.button.disabled = state.submitting || (!!state.consent && !refs.consent.checked);
+    }
+
     function setSubmitting(on) {
       state.submitting = on;
-      refs.button.disabled = on;
+      syncPayDisabled();
       refs.button.setAttribute('aria-busy', on ? 'true' : 'false');
       clear(refs.button);
       if (on) refs.button.appendChild(h('span', { 'class': 'spin', 'aria-hidden': 'true' }));
@@ -524,6 +547,7 @@
       if (attribution.campaign) body.campaign = attribution.campaign;
       if (attribution.ref) body.attributionRef = attribution.ref;
       if (testToken) body.testToken = testToken;
+      if (state.consent) body.termsAccepted = true;
 
       clearTimeout(state.timer);
       setSubmitting(true);
@@ -578,8 +602,34 @@
       form.appendChild(refs.summary);
       form.appendChild(refs.priceNote);
 
+      // Required consent checkbox when the product (or the global setting) has legal links.
+      var termsHref = safeHref(p.termsUrl);
+      var privacyHref = safeHref(p.privacyUrl);
+      state.consent = !!(termsHref || privacyHref);
+      if (state.consent) {
+        var cid = uid + '-consent';
+        var legalLink = function (href, text) {
+          return h('a', { href: href, target: '_blank', rel: 'noopener noreferrer', text: text });
+        };
+        var label = h('label', { 'for': cid }, [document.createTextNode('I have read and agree to the ')]);
+        if (termsHref) label.appendChild(legalLink(termsHref, 'Terms and Conditions'));
+        if (termsHref && privacyHref) label.appendChild(document.createTextNode(' and '));
+        if (privacyHref) label.appendChild(legalLink(privacyHref, 'Privacy Policy'));
+        label.appendChild(document.createTextNode('.'));
+        refs.consent = h('input', { type: 'checkbox', id: cid, name: 'termsAccepted', required: 'required', 'aria-required': 'true', 'aria-describedby': cid + '-err' });
+        refs.consentErr = h('p', { 'class': 'err consent-err', id: cid + '-err' });
+        form.appendChild(h('div', { 'class': 'consent' }, [refs.consent, label]));
+        form.appendChild(refs.consentErr);
+        refs.consent.addEventListener('change', function () {
+          refs.consentErr.textContent = '';
+          refs.consent.removeAttribute('aria-invalid');
+          syncPayDisabled();
+        });
+      }
+
       refs.button = h('button', { type: 'submit', 'class': 'pay' }, [h('span', { text: buttonText })]);
       form.appendChild(refs.button);
+      syncPayDisabled();
       card.appendChild(form);
       card.appendChild(h('p', { 'class': 'foot', text: testToken ? 'PayMongo TEST MODE \u2014 no real charge' : 'Secure payment via PayMongo' }));
 

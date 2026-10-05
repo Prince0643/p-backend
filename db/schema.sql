@@ -332,3 +332,31 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS privacy_url TEXT;
 ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS terms_url TEXT;
 ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS privacy_url TEXT;
+
+-- Per-product coupon config. A "product" is a local product (kind 'local', location_key '', ref =
+-- products.id) or a GHL product in a tracked location (kind 'ghl', location_key 'global'|'main',
+-- ref = GHL product id). Default is ALLOWED: affiliate_coupons_enabled is one switch for ALL
+-- affiliate coupons, and product_coupon_blocks is a BLOCK list of GENERAL coupon codes, so a
+-- new coupon works everywhere until switched off. This is in addition to (not instead of) the
+-- coupon-side coupon_products "eligible products" list - both rules must allow the product.
+CREATE TABLE IF NOT EXISTS product_coupon_config (
+    id                         BIGSERIAL PRIMARY KEY,
+    kind                       TEXT NOT NULL CHECK (kind IN ('local', 'ghl')),
+    location_key               TEXT NOT NULL DEFAULT '',
+    ref                        TEXT NOT NULL,
+    name                       TEXT,
+    affiliate_coupons_enabled  BOOLEAN NOT NULL DEFAULT true,
+    updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (kind, location_key, ref)
+);
+CREATE TABLE IF NOT EXISTS product_coupon_blocks (
+    config_id    BIGINT NOT NULL REFERENCES product_coupon_config(id) ON DELETE CASCADE,
+    coupon_code  TEXT NOT NULL REFERENCES coupons(code) ON DELETE CASCADE,
+    PRIMARY KEY (config_id, coupon_code)
+);
+CREATE INDEX IF NOT EXISTS idx_product_coupon_blocks_code ON product_coupon_blocks(coupon_code);
+
+-- Per-location GHL product-restriction sync state for a coupon, keyed by location key:
+-- { original: [productIds] (the restriction GHL had before we first wrote one - empty = all),
+--   pushed: [productIds] (what we last wrote), deactivatedByUs, status: 'synced'|'error', error, at }.
+ALTER TABLE coupons ADD COLUMN IF NOT EXISTS ghl_product_sync JSONB;

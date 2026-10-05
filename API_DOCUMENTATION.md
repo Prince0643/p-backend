@@ -454,6 +454,31 @@ E-wallets (GCash, Maya, GrabPay, ShopeePay): open the redirect page and choose A
 
 ---
 
+## Per-product coupon config (Admin)
+
+All routes are under `/api/admin` and need the admin API key. A "product" is a local product
+(`kind=local`, `ref` = products.id) or a GHL product in a tracked location (`kind=ghl`,
+`location=global|main`, `ref` = GHL product id). Default is ALLOWED: one switch
+(`affiliateCouponsEnabled`) covers all affiliate coupons and a block list
+(`disabledCouponCodes`) covers general coupons, so new coupons work everywhere until switched
+off. This applies in addition to a coupon's own eligible-products list (`coupon_products`).
+
+- `GET /ghl-products` - `{ locations: [{ key, locationId, products: [{ id, name, price }], error? }] }`.
+- `GET /product-coupon-config?kind=&ref=[&location=]` - `{ product, affiliateCouponsEnabled, coupons: [{ code, discountPercent, active, origin, enabled, eligible, ineligibleReason }] }` (the general coupons relevant to that product).
+- `PUT /product-coupon-config` - body `{ kind, location?, ref, name?, affiliateCouponsEnabled, disabledCouponCodes }`; replaces the product's config (400 on a bad kind/location/ref or unknown coupon code) and returns the GET shape plus `ghlSync: { attempted, errors: [{ code, locationKey, error }] }`. GHL failures never fail the save.
+- `POST /product-coupon-config/ghl-sync` - full re-sync now, `{ results, errors }`.
+- `GET /products` includes `couponConfig: { affiliateCouponsEnabled, disabledCouponCount }` per product.
+
+Local enforcement: quote and checkout reject a blocked coupon with `This coupon is not valid for
+this product.` (reason `product_coupon_disabled`); a blocked `?ref=` code at checkout returns
+400 with that error instead of being silently dropped.
+
+GHL: for each coupon at each tracked location where it exists, `productIds` = the location's
+products, limited to the coupon's original GHL restriction (snapshotted in `coupons.ghl_product_sync`),
+minus blocked products. Nothing blocked restores the original; nothing allowed deactivates the
+coupon there (reactivated when allowed again). A production job re-syncs every 10 minutes so new
+GHL products are allowed by default.
+
 ## Webhook Endpoint (Internal)
 
 **POST** `/api/payments/webhook`

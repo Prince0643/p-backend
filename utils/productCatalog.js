@@ -187,6 +187,8 @@ async function updateProduct(id, payload) {
 async function deleteProduct(productId) {
     const id = toSlugId(productId);
     const { rowCount } = await pool.query('DELETE FROM products WHERE id = $1', [id]);
+    // product_coupon_config has no FK to products (it also holds GHL products); its blocks cascade.
+    if (rowCount > 0) await pool.query("DELETE FROM product_coupon_config WHERE kind = 'local' AND ref = $1", [id]);
     return rowCount > 0;
 }
 

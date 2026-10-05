@@ -119,7 +119,8 @@ function rowToCoupon(row, productIds = []) {
         localEnabled: row.local_enabled !== false,
         ghlCouponMeta: row.ghl_coupon_meta || null,
         origin: row.origin || 'local',
-        ghlSync: row.ghl_sync || null
+        ghlSync: row.ghl_sync || null,
+        ghlProductSync: row.ghl_product_sync || null
     };
     if (row.affiliate_id !== undefined) {
         coupon.affiliate = row.affiliate_id
@@ -255,6 +256,23 @@ async function deleteCoupon(code) {
 const PENDING_RESERVATION_TTL_MINUTES = 30;
 
 /**
+ * Per-product coupon config for a LOCAL product (product_coupon_config, default allowed):
+ * an affiliate coupon is blocked when the product's affiliate switch is off, a general coupon
+ * when its code is on the product's block list. Applies on top of coupon_products.
+ */
+async function isCouponBlockedForLocalProduct(db, couponRow, productId) {
+    const { rows } = await db.query(
+        `SELECT c.affiliate_coupons_enabled,
+                EXISTS (SELECT 1 FROM product_coupon_blocks b WHERE b.config_id = c.id AND b.coupon_code = $2) AS blocked
+         FROM product_coupon_config c
+         WHERE c.kind = 'local' AND c.location_key = '' AND c.ref = $1`,
+        [productId, couponRow.code]
+    );
+    if (!rows[0]) return false;
+    return couponRow.type === 'affiliate' ? rows[0].affiliate_coupons_enabled === false : rows[0].blocked;
+}
+
+/**
  * The coupon eligibility rules, shared by beginCouponReservation (mutating: runs inside
  * the reservation transaction, on a locked coupon row) and validateCouponReadOnly
  * (read-only quote path). `db` is a pg client or the pool. With `mutate: true` it also
@@ -292,6 +310,9 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
     const productIds = productRows.map((r) => r.product_id);
     if (productIds.length > 0 && productId && !productIds.includes(productId)) {
         return { error: 'This promo code is not valid for the selected product', reason: 'product_not_eligible' };
+    }
+    if (productId && await isCouponBlockedForLocalProduct(db, couponRow, productId)) {
+        return { error: 'This coupon is not valid for this product.', reason: 'product_coupon_disabled' };
     }
 
     if (normalizedEmail) {
@@ -742,6 +763,15 @@ async function setGhlSyncState(code, locationKey, state) {
     );
 }
 
+/** Merges one location's product-restriction sync state into coupons.ghl_product_sync ({ [locationKey]: state }). */
+async function setGhlProductSyncState(code, locationKey, state) {
+    await pool.query(
+        `UPDATE coupons SET ghl_product_sync = COALESCE(ghl_product_sync, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+         WHERE code = $1`,
+        [toCouponCode(code), locationKey, JSON.stringify({ ...state, at: new Date().toISOString() })]
+    );
+}
+
 /**
  * Local affiliate coupons with a push attempt that has not succeeded yet (pending or
  * error). Attempts newer than a minute are left alone so a retry never races the request
@@ -913,6 +943,7 @@ module.exports = {
     createGhlDiscoveredCoupon,
     addGhlLocationToCoupon,
     setGhlSyncState,
+    setGhlProductSyncState,
     listCouponsWithPendingGhlPush,
     setCouponAffiliation,
     listCreditableRedemptions,

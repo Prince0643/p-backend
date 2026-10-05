@@ -75,7 +75,7 @@ exports.quote = async (req, res) => {
                     message: `Promo code applied: ${money(discountPercent * 100)}% off`
                 };
             } else {
-                promo = { code: promoCode, applied: false, message: result.error || 'Invalid promo code' };
+                promo = { code: promoCode, applied: false, message: result.error || 'Invalid promo code', reason: result.reason };
             }
         }
 

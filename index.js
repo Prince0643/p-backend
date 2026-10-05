@@ -11,6 +11,7 @@ const embedRoutes = require('./routes/embed');
 const paymentRoutes = require('./routes/payments');
 const clockistryRoutes = require('./routes/clockistry');
 const adminProductRoutes = require('./routes/adminProducts');
+const adminProductCouponConfigRoutes = require('./routes/adminProductCouponConfig');
 const adminCouponRoutes = require('./routes/adminCoupons');
 const adminGhlCouponRoutes = require('./routes/adminGhlCoupons');
 const adminCampaignRoutes = require('./routes/adminCampaigns');
@@ -108,6 +109,7 @@ app.use('/api/clockistry', clockistryRoutes);
 // router is mounted first gets first look at any given /api/admin/* request.
 app.use('/api/admin', adminAuthRoutes);
 app.use('/api/admin', adminProductRoutes);
+app.use('/api/admin', adminProductCouponConfigRoutes);
 app.use('/api/admin', adminCouponRoutes);
 app.use('/api/admin', adminGhlCouponRoutes);
 app.use('/api/admin', adminCampaignRoutes);
@@ -246,6 +248,17 @@ if (process.env.NODE_ENV === 'production') {
     };
     setTimeout(runStudentRetry, 60 * 1000);
     setInterval(runStudentRetry, IMPORT_INTERVAL_MS);
+
+    // Re-apply the per-product coupon config in GHL: picks up GHL products added since the last
+    // run (they are allowed by default) and repairs restrictions that drifted.
+    const { syncAll: syncProductCoupons } = require('./services/ghlProductCouponSync');
+    const runProductCouponSync = () => {
+        syncProductCoupons().catch((err) => {
+            console.error('GHL product coupon sync failed:', err.message);
+        });
+    };
+    setTimeout(runProductCouponSync, 90 * 1000);
+    setInterval(runProductCouponSync, IMPORT_INTERVAL_MS);
 }
 
 module.exports = app;

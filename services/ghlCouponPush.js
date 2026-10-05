@@ -104,6 +104,11 @@ async function pushCouponSafe(code) {
         for (const r of outcome.results) {
             if (r.action === 'error') console.log(`GHL affiliate coupon push failed (non-fatal) [${r.key}] ${coupon.code}:`, r.error);
         }
+        // A freshly created coupon starts unrestricted in GHL: apply the per-product coupon config.
+        // Lazy require - ghlProductCouponSync itself uses makeExistingCache from this module.
+        if (outcome.results.some((r) => r.action === 'created')) {
+            await require('./ghlProductCouponSync').syncCouponsSafe([coupon.code]);
+        }
         return outcome;
     } catch (err) {
         console.log('GHL affiliate coupon push failed (non-fatal):', err.message);

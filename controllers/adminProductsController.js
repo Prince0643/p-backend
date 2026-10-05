@@ -6,6 +6,7 @@ const {
     deleteProduct,
     buildHtmlSnippet
 } = require('../utils/productCatalog');
+const { localConfigSummaries } = require('../utils/productCouponConfig');
 
 function getBackendUrl(req) {
     const configured = process.env.PUBLIC_BACKEND_URL || process.env.BACKEND_URL;
@@ -17,8 +18,12 @@ function getBackendUrl(req) {
 
 exports.list = async (req, res) => {
     try {
-        const products = await listProducts();
-        res.json({ success: true, products });
+        const [products, summaries] = await Promise.all([listProducts(), localConfigSummaries()]);
+        const withConfig = products.map((p) => ({
+            ...p,
+            couponConfig: summaries.get(p.id) || { affiliateCouponsEnabled: true, disabledCouponCount: 0 }
+        }));
+        res.json({ success: true, products: withConfig });
     } catch (err) {
         res.status(500).json({ error: err.message || 'Failed to list products' });
     }

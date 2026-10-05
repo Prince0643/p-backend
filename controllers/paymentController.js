@@ -135,7 +135,9 @@ exports.createPaymentIntent = async (req, res) => {
                 isTest
             });
             if (!reservation.coupon) {
-                if (isExplicitlyTypedPromoCode) {
+                // A ref/code blocked for this product by the per-product coupon config must show an
+                // error too, not be silently dropped like an unknown/expired ref.
+                if (isExplicitlyTypedPromoCode || reservation.reason === 'product_coupon_disabled') {
                     return res.status(400).json({ error: reservation.error || 'Invalid promo code' });
                 }
                 console.log('Attribution ref rejected, proceeding without discount:', reservation.error);

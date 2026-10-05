@@ -444,10 +444,15 @@
         refs.promoMsg.textContent = '✓ Code applied';
       } else if (p && p.applied === false) {
         var fromRef = !state.promoEdited && attribution.ref && promoVal === attribution.ref;
-        refs.promoMsg.className = fromRef ? 'note' : 'err';
-        refs.promoMsg.textContent = fromRef
-          ? 'The referral code ' + attribution.ref + ' could not be applied. You can still continue.'
-          : (p.message || 'This code could not be applied.');
+        // A code switched off for this product is a blocking error (checkout rejects it too),
+        // even when it came from a referral link.
+        var blocked = p.reason === 'product_coupon_disabled';
+        refs.promoMsg.className = fromRef && !blocked ? 'note' : 'err';
+        refs.promoMsg.textContent = blocked
+          ? 'This coupon is not valid for this product. Remove it to continue.'
+          : fromRef
+            ? 'The referral code ' + attribution.ref + ' could not be applied. You can still continue.'
+            : (p.message || 'This code could not be applied.');
       } else {
         refs.promoMsg.className = 'note';
       }

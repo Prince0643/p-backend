@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
 import { EmbedPanel } from "@/components/EmbedPanel";
+import { GhlProductsPanel } from "@/components/GhlProductsPanel";
+import { ProductCouponConfigPanel } from "@/components/ProductCouponConfigPanel";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
@@ -14,6 +16,7 @@ type Product = {
   amountPhp: number;
   currency: string;
   billing: { type: string; interval?: string };
+  couponConfig?: { affiliateCouponsEnabled: boolean; disabledCouponCount: number };
   defaults: {
     paymentMethod?: string;
     source?: string;
@@ -237,7 +240,17 @@ export default function ProductsPage() {
                     {p.defaults?.displaySuffix ? ` ${p.defaults.displaySuffix}` : ""}
                   </div>
                 </div>
-                <div className="rounded-full border border-white/10 px-2.5 py-1 text-xs">Embed</div>
+                <div className="flex flex-col items-end gap-1">
+                  <div className="rounded-full border border-white/10 px-2.5 py-1 text-xs">Embed</div>
+                  {p.couponConfig && p.couponConfig.affiliateCouponsEnabled === false && (
+                    <div className="rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] text-amber-200">Affiliate off</div>
+                  )}
+                  {p.couponConfig && p.couponConfig.disabledCouponCount > 0 && (
+                    <div className="rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] text-amber-200">
+                      {p.couponConfig.disabledCouponCount} {p.couponConfig.disabledCouponCount === 1 ? "coupon" : "coupons"} off
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -330,6 +343,23 @@ export default function ProductsPage() {
             </div>
           </form>
 
+          {selectedId && (
+            <>
+              <div className="h-px bg-white/10" />
+              <ProductCouponConfigPanel
+                key={selectedId}
+                target={{ kind: "local", ref: selectedId, name: form.name }}
+                requireAuth={requireAuth}
+                handleAuthError={handleAuthError}
+                toast={toast}
+                onSaved={() => {
+                  const key = requireAuth();
+                  if (key) loadProducts(key).catch(() => {});
+                }}
+              />
+            </>
+          )}
+
           <div className="h-px bg-white/10" />
 
           {selectedId ? (
@@ -338,6 +368,10 @@ export default function ProductsPage() {
             <p className="p-4 text-xs text-slate-400">Save or select a product to get its embed form.</p>
           )}
         </section>
+
+        <div className="lg:col-span-2">
+          <GhlProductsPanel requireAuth={requireAuth} handleAuthError={handleAuthError} toast={toast} />
+        </div>
       </main>
       <Toast message={message} />
     </div>

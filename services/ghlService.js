@@ -167,7 +167,14 @@ class GhlService {
             err.statusCode = 502;
             throw err;
         }
+        return this.listLocationProducts(location);
+    }
 
+    /**
+     * Lists all products in one GHL location as [{ ref, name, price, currency }]. `withPrices:
+     * false` skips the per-product price lookups (used when only the ids matter).
+     */
+    async listLocationProducts(location, { withPrices = true } = {}) {
         const client = this.createClient({ privateKey: location.privateKey, locationId: location.locationId, version: '2021-07-28' });
         const products = [];
         let offset = 0;
@@ -182,7 +189,7 @@ class GhlService {
             offset += limit;
         }
 
-        const withPrices = await Promise.all(products.map(async (p) => {
+        const listed = await Promise.all(products.map(async (p) => {
             const ref = p._id || p.id;
             let price = null;
             let currency = null;
@@ -190,7 +197,7 @@ class GhlService {
             if (firstPrice) {
                 price = firstPrice.amount ?? null;
                 currency = firstPrice.currency ?? null;
-            } else {
+            } else if (withPrices) {
                 try {
                     const priceRes = await client.get(`/products/${ref}/price`, { params: { locationId: location.locationId } });
                     const priceData = Array.isArray(priceRes.data?.prices) ? priceRes.data.prices[0] : priceRes.data?.price || priceRes.data;
@@ -204,7 +211,7 @@ class GhlService {
             return { ref, name: p.name || '', price, currency };
         }));
 
-        return withPrices;
+        return listed;
     }
 
     createClient({ privateKey, locationId, version = '2021-07-28' }) {
@@ -256,6 +263,7 @@ class GhlService {
             // restrictions. There is no `status` field on update, so active/inactive
             // drift can only be reported, never synced (see couponNeedsUpdate).
             applyToFuturePayments: coupon.applyToFuturePayments,
+            applyToFuturePaymentsConfig: coupon.applyToFuturePaymentsConfig,
             limitPerCustomer: coupon.limitPerCustomer,
             productIds: Array.isArray(coupon.productIds) ? coupon.productIds : [],
             priceIds: Array.isArray(coupon.priceIds) ? coupon.priceIds : [],
@@ -487,6 +495,48 @@ class GhlService {
             version: 'v3'
         });
         const payload = this.buildCouponUpdatePayload(existingGhlCoupon, coupon, location.locationId);
+        const res = await client.put('/payments/coupon', payload);
+        return this.normalizeCoupon(res.data || payload, location);
+    }
+
+    /**
+     * Payload for PUT /payments/coupon that changes ONLY the product restriction and/or endDate,
+     * carrying every other field over from the existing GHL coupon so a GHL-origin coupon is never
+     * rewritten from our DB's lossy copy. The API has no status field: a coupon is switched off by
+     * ending it. Empty productIds is omitted (GHL reads that as "all products"). `endDate`:
+     * undefined keeps the existing one, null removes it, a string sets it.
+     */
+    buildProductRestrictionPayload(existing, productIds, { endDate, locationId } = {}) {
+        const end = endDate === undefined ? existing.endDate : endDate;
+        const payload = {
+            id: existing.id,
+            altId: locationId,
+            altType: 'location',
+            name: existing.name,
+            code: existing.code,
+            discountType: existing.discountType || 'percentage',
+            discountValue: existing.discountValue,
+            startDate: existing.startDate || undefined,
+            endDate: end || undefined,
+            usageLimit: existing.usageLimit ?? undefined,
+            applyToFuturePayments: existing.applyToFuturePayments == null ? undefined : Boolean(existing.applyToFuturePayments),
+            applyToFuturePaymentsConfig: existing.applyToFuturePaymentsConfig || undefined,
+            limitPerCustomer: existing.limitPerCustomer == null ? undefined : Boolean(existing.limitPerCustomer)
+        };
+        if (productIds.length) payload.productIds = productIds;
+        if (existing.priceIds?.length) payload.priceIds = existing.priceIds;
+        if (existing.variantIds?.length) payload.variantIds = existing.variantIds;
+        Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+        return payload;
+    }
+
+    async updateCouponProductRestriction(location, existing, productIds, { endDate } = {}) {
+        const client = this.createClient({
+            privateKey: location.privateKey,
+            locationId: location.locationId,
+            version: 'v3'
+        });
+        const payload = this.buildProductRestrictionPayload(existing, productIds, { endDate, locationId: location.locationId });
         const res = await client.put('/payments/coupon', payload);
         return this.normalizeCoupon(res.data || payload, location);
     }

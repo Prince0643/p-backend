@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { ProductCouponConfigPanel, type CouponTarget } from "@/components/ProductCouponConfigPanel";
 
@@ -26,7 +26,14 @@ export function GhlProductsPanel({ requireAuth, handleAuthError, toast, refreshT
   const [selected, setSelected] = useState<CouponTarget | null>(null);
   const [syncing, setSyncing] = useState(false);
 
+  // Always call the latest auth helpers without making them load() deps (avoids refetch loops).
+  const authRef = useRef({ requireAuth, handleAuthError });
+  useEffect(() => {
+    authRef.current = { requireAuth, handleAuthError };
+  }, [requireAuth, handleAuthError]);
+
   const load = useCallback(async () => {
+    const { requireAuth, handleAuthError } = authRef.current;
     const key = requireAuth();
     if (!key) return;
     setLoading(true);
@@ -39,11 +46,9 @@ export function GhlProductsPanel({ requireAuth, handleAuthError, toast, refreshT
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- auth helpers are not stable deps
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount
     load();
   }, [load, refreshToken]);
 

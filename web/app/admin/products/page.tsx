@@ -370,7 +370,9 @@ export default function ProductsPage() {
         </section>
 
         <div className="lg:col-span-2">
-          <GhlProductsPanel requireAuth={requireAuth} handleAuthError={handleAuthError} toast={toast} />
+          {ready && admin && (
+            <GhlProductsPanel requireAuth={requireAuth} handleAuthError={handleAuthError} toast={toast} />
+          )}
         </div>
       </main>
       <Toast message={message} />

@@ -74,12 +74,16 @@ function buildImportPlan({ ghlCoupons, localCodes, onlyCodes = null }) {
         const expiresAt = first.endDate || null;
         const maxRedemptions = first.usageLimit || null;
         const ghlLocationIds = entries.map((e) => e.locationId);
+        // GHL only has a boolean limitPerCustomer: true -> 1 use per customer, otherwise unlimited.
+        const limitPerCustomer = Boolean(first.limitPerCustomer);
+        const maxRedemptionsPerCustomer = limitPerCustomer ? 1 : null;
         const ghlCouponMeta = {
+            limitPerCustomer,
             productIds: first.productIds || [],
             byLocation: entries.map((e) => ({ locationId: e.locationId, locationName: e.locationName, ghlCouponId: e.id }))
         };
 
-        toImport.push({ code, name: first.name, discountPercent, expiresAt, maxRedemptions, ghlLocationIds, ghlCouponMeta });
+        toImport.push({ code, name: first.name, discountPercent, expiresAt, maxRedemptions, maxRedemptionsPerCustomer, ghlLocationIds, ghlCouponMeta });
     }
 
     let notFoundOnlyCodes = [];
@@ -116,7 +120,7 @@ async function main() {
     for (const c of toImport) {
         console.log(
             `  IMPORT ${c.code}: discountPercent=${c.discountPercent}, locations=[${c.ghlLocationIds.join(', ')}], ` +
-            `maxRedemptions=${c.maxRedemptions ?? 'none'}, expiresAt=${c.expiresAt ?? 'none'}`
+            `maxRedemptions=${c.maxRedemptions ?? 'none'}, perCustomer=${c.maxRedemptionsPerCustomer ?? 'unlimited'}, expiresAt=${c.expiresAt ?? 'none'}`
         );
     }
     for (const s of skipped) {
@@ -141,6 +145,7 @@ async function main() {
             localEnabled: false,
             expiresAt: c.expiresAt,
             maxRedemptions: c.maxRedemptions,
+            maxRedemptionsPerCustomer: c.maxRedemptionsPerCustomer,
             ghlLocationIds: c.ghlLocationIds,
             ghlCouponMeta: c.ghlCouponMeta,
             notes: `Imported from GHL (${c.ghlLocationIds.join(', ')})`

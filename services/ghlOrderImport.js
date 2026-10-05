@@ -223,7 +223,9 @@ async function processPaidOrder(location, order, summary, getDetail, { dryRun })
         } else {
             const ghlCoupon = detail?.coupon;
             const discountPercent = ghlCoupon?.discountType === 'percentage' ? (toNum(ghlCoupon.discountValue) || 0) / 100 : 0;
-            const created = await couponStore.createGhlDiscoveredCoupon({ code, discountPercent, locationId: location.locationId });
+            const created = await couponStore.createGhlDiscoveredCoupon({
+                code, discountPercent, locationId: location.locationId, limitPerCustomer: Boolean(ghlCoupon?.limitPerCustomer)
+            });
             if (created) summary.couponsCreated++;
             coupon = await couponStore.findCoupon(code);
         }

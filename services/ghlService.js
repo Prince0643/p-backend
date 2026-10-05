@@ -1,4 +1,5 @@
 const axios = require('axios');
+const couponSettings = require('../utils/couponSettings');
 
 class GhlService {
     constructor() {
@@ -382,6 +383,19 @@ class GhlService {
         return this.truncateCouponName(first || '');
     }
 
+    /**
+     * GHL only has a boolean limitPerCustomer: true = one use per customer. Callers that know the
+     * global affiliate setting set `coupon.ghlLimitPerCustomer` (boolean) on affiliate coupons.
+     * Otherwise: affiliate -> true (the default setting is 1); general -> limit === 1 (null =
+     * unlimited -> false); a coupon object with no per-customer field at all -> true (legacy).
+     */
+    limitPerCustomerFor(coupon) {
+        if (typeof coupon.ghlLimitPerCustomer === 'boolean') return coupon.ghlLimitPerCustomer;
+        if (coupon.type === 'affiliate') return true;
+        if (coupon.maxRedemptionsPerCustomer === undefined) return true;
+        return coupon.maxRedemptionsPerCustomer === 1;
+    }
+
     /** Payload for POST /payments/coupon (create). */
     buildCouponPayload(coupon, locationId) {
         const payload = {
@@ -396,7 +410,7 @@ class GhlService {
             // when omitted - both are always sent explicitly so a coupon never silently
             // gets the opposite of what we intend.
             applyToFuturePayments: false,
-            limitPerCustomer: true
+            limitPerCustomer: this.limitPerCustomerFor(coupon)
         };
         if (coupon.maxRedemptions) payload.usageLimit = coupon.maxRedemptions;
         if (coupon.expiresAt) payload.endDate = coupon.expiresAt;
@@ -422,7 +436,7 @@ class GhlService {
             discountValue: Number((Number(coupon.discountPercent || 0) * 100).toFixed(4)),
             startDate: existingGhlCoupon.startDate || new Date().toISOString(),
             applyToFuturePayments: false,
-            limitPerCustomer: true
+            limitPerCustomer: this.limitPerCustomerFor(coupon)
         };
         if (coupon.maxRedemptions) payload.usageLimit = coupon.maxRedemptions;
         if (coupon.expiresAt) payload.endDate = coupon.expiresAt;
@@ -466,7 +480,7 @@ class GhlService {
         if (existingUsageLimit !== expectedUsageLimit) return true;
         if (existingEndDate !== expectedEndDate) return true;
         if (applyToFuturePayments) return true;
-        if (!limitPerCustomer) return true;
+        if (limitPerCustomer !== this.limitPerCustomerFor(coupon)) return true;
         return false;
     }
 
@@ -504,9 +518,10 @@ class GhlService {
      * carrying every other field over from the existing GHL coupon so a GHL-origin coupon is never
      * rewritten from our DB's lossy copy. The API has no status field: a coupon is switched off by
      * ending it. Empty productIds is omitted (GHL reads that as "all products"). `endDate`:
-     * undefined keeps the existing one, null removes it, a string sets it.
+     * undefined keeps the existing one, null removes it, a string sets it. `limitPerCustomer`:
+     * undefined keeps the existing flag, a boolean sets it.
      */
-    buildProductRestrictionPayload(existing, productIds, { endDate, locationId } = {}) {
+    buildProductRestrictionPayload(existing, productIds, { endDate, locationId, limitPerCustomer } = {}) {
         const end = endDate === undefined ? existing.endDate : endDate;
         const payload = {
             id: existing.id,
@@ -521,7 +536,9 @@ class GhlService {
             usageLimit: existing.usageLimit ?? undefined,
             applyToFuturePayments: existing.applyToFuturePayments == null ? undefined : Boolean(existing.applyToFuturePayments),
             applyToFuturePaymentsConfig: existing.applyToFuturePaymentsConfig || undefined,
-            limitPerCustomer: existing.limitPerCustomer == null ? undefined : Boolean(existing.limitPerCustomer)
+            limitPerCustomer: limitPerCustomer === undefined
+                ? (existing.limitPerCustomer == null ? undefined : Boolean(existing.limitPerCustomer))
+                : Boolean(limitPerCustomer)
         };
         if (productIds.length) payload.productIds = productIds;
         if (existing.priceIds?.length) payload.priceIds = existing.priceIds;
@@ -530,13 +547,13 @@ class GhlService {
         return payload;
     }
 
-    async updateCouponProductRestriction(location, existing, productIds, { endDate } = {}) {
+    async updateCouponProductRestriction(location, existing, productIds, { endDate, limitPerCustomer } = {}) {
         const client = this.createClient({
             privateKey: location.privateKey,
             locationId: location.locationId,
             version: 'v3'
         });
-        const payload = this.buildProductRestrictionPayload(existing, productIds, { endDate, locationId: location.locationId });
+        const payload = this.buildProductRestrictionPayload(existing, productIds, { endDate, locationId: location.locationId, limitPerCustomer });
         const res = await client.put('/payments/coupon', payload);
         return this.normalizeCoupon(res.data || payload, location);
     }
@@ -550,7 +567,11 @@ class GhlService {
     async syncCouponsToGhlLocations(allCoupons = [], { dryRun = false } = {}) {
         // Coupons discovered from native GHL orders (origin 'ghl') already live in GHL and
         // are owned there - they must never be created/updated from our side.
-        const coupons = allCoupons.filter((coupon) => coupon.origin !== 'ghl');
+        // Affiliate coupons follow the global affiliate-discounts-per-customer setting (GHL: true only when it is 1).
+        const affiliateLimit = await couponSettings.getAffiliateDiscountsPerCustomer();
+        const coupons = allCoupons
+            .filter((coupon) => coupon.origin !== 'ghl')
+            .map((coupon) => (coupon.type === 'affiliate' ? { ...coupon, ghlLimitPerCustomer: affiliateLimit === 1 } : coupon));
         const allLocations = this.getConfiguredLocations();
         const activeCoupons = coupons.filter((coupon) => coupon.active);
         const inactiveCoupons = coupons.filter((coupon) => !coupon.active);

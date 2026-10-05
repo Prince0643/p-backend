@@ -6,6 +6,7 @@
 const pool = require('../db/pool');
 const ghlService = require('./ghlService');
 const couponStore = require('../utils/couponStore');
+const couponSettings = require('../utils/couponSettings');
 
 function errorMessage(err) {
     return err.response?.data?.message || err.response?.data?.error || err.message || 'GHL request failed';
@@ -38,10 +39,12 @@ async function affiliateCouponName(code) {
  * `updateExisting`) updates drifted ones. `dryRun` writes nothing (no GHL calls that
  * mutate, no state). Returns { code, skipped?, results: [{ key, locationId, action, ghlCouponId?, error? }] }.
  */
-async function pushCoupon(coupon, { dryRun = false, updateExisting = true, locations, existingFor = makeExistingCache() } = {}) {
-    if (coupon.origin === 'ghl') return { code: coupon.code, skipped: 'ghl_origin', results: [] };
-    if (coupon.type !== 'affiliate') return { code: coupon.code, skipped: 'not_affiliate', results: [] };
-    if (!coupon.active) return { code: coupon.code, skipped: 'inactive', results: [] };
+async function pushCoupon(rawCoupon, { dryRun = false, updateExisting = true, locations, existingFor = makeExistingCache() } = {}) {
+    if (rawCoupon.origin === 'ghl') return { code: rawCoupon.code, skipped: 'ghl_origin', results: [] };
+    if (rawCoupon.type !== 'affiliate') return { code: rawCoupon.code, skipped: 'not_affiliate', results: [] };
+    if (!rawCoupon.active) return { code: rawCoupon.code, skipped: 'inactive', results: [] };
+    // GHL only has a boolean limitPerCustomer: true when the global affiliate setting is exactly 1.
+    const coupon = { ...rawCoupon, ghlLimitPerCustomer: (await couponSettings.getAffiliateDiscountsPerCustomer()) === 1 };
 
     const targets = locations || ghlService.getTrackedLocations();
     if (targets.length === 0) return { code: coupon.code, skipped: 'no_locations', results: [] };
@@ -116,6 +119,67 @@ async function pushCouponSafe(code) {
     }
 }
 
+/**
+ * Non-fatal, fire-and-forget friendly: re-pushes every active local affiliate coupon so the GHL
+ * limitPerCustomer flag follows the global affiliate setting (drift is detected per coupon, so
+ * coupons already correct in GHL are left alone). Never throws.
+ */
+async function pushAllAffiliateCouponsSafe() {
+    try {
+        const coupons = (await couponStore.listCoupons({ type: 'affiliate' })).filter((c) => c.origin === 'local' && c.active);
+        const existingFor = makeExistingCache();
+        for (const coupon of coupons) {
+            const outcome = await pushCoupon(coupon, { existingFor });
+            for (const r of outcome.results) {
+                if (r.action === 'error') console.log(`GHL affiliate coupon re-push failed (non-fatal) [${r.key}] ${coupon.code}:`, r.error);
+            }
+        }
+    } catch (err) {
+        console.log('GHL affiliate coupon re-push failed (non-fatal):', err.message);
+    }
+}
+
+/**
+ * Non-fatal: for a GHL-origin general coupon whose per-customer limit an admin just changed, sets
+ * only limitPerCustomer (1 -> true, else false) at every tracked location where the coupon exists.
+ * Uses the product-restriction update path, which carries every other existing GHL field over
+ * unchanged. Never throws.
+ */
+async function pushLimitPerCustomerSafe(code) {
+    try {
+        const coupon = await couponStore.findCoupon(code);
+        if (!coupon || coupon.origin !== 'ghl' || coupon.type !== 'general') return null;
+        const wanted = coupon.maxRedemptionsPerCustomer === 1;
+        const existingFor = makeExistingCache();
+        const results = [];
+        for (const location of ghlService.getTrackedLocations()) {
+            const existing = await existingFor(location);
+            if (existing.error) {
+                console.log(`GHL limitPerCustomer push failed (non-fatal) [${location.key}] ${coupon.code}:`, existing.error);
+                results.push({ key: location.key, action: 'error', error: existing.error });
+                continue;
+            }
+            const present = existing.get(coupon.code.toUpperCase());
+            if (!present) continue;
+            if (Boolean(present.limitPerCustomer) === wanted) {
+                results.push({ key: location.key, action: 'unchanged' });
+                continue;
+            }
+            try {
+                await ghlService.updateCouponProductRestriction(location, present, present.productIds || [], { limitPerCustomer: wanted });
+                results.push({ key: location.key, action: 'updated' });
+            } catch (err) {
+                console.log(`GHL limitPerCustomer push failed (non-fatal) [${location.key}] ${coupon.code}:`, errorMessage(err));
+                results.push({ key: location.key, action: 'error', error: errorMessage(err) });
+            }
+        }
+        return results;
+    } catch (err) {
+        console.log('GHL limitPerCustomer push failed (non-fatal):', err.message);
+        return null;
+    }
+}
+
 /** Retries every affiliate coupon whose last push attempt is still pending/errored. */
 async function retryPendingPushes() {
     const summary = { attempted: 0, synced: 0, failed: 0 };
@@ -130,4 +194,4 @@ async function retryPendingPushes() {
     return summary;
 }
 
-module.exports = { pushCoupon, pushCouponSafe, retryPendingPushes, makeExistingCache };
+module.exports = { pushCoupon, pushCouponSafe, pushAllAffiliateCouponsSafe, pushLimitPerCustomerSafe, retryPendingPushes, makeExistingCache };

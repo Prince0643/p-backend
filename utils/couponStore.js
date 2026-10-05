@@ -1,5 +1,6 @@
 // utils/couponStore.js
 const pool = require('../db/pool');
+const couponSettings = require('./couponSettings');
 
 // Soft cap applied to all coupon codes (new and existing). No existing code is
 // anywhere near this length - it just guards against pathologically long input.
@@ -50,6 +51,16 @@ function normalizePercent(value, fieldName, { required = false, defaultValue = 0
     return num;
 }
 
+/** Positive integer, or null for unlimited (null/undefined/''). Throws on anything else. */
+function normalizePerCustomerLimit(value, fieldName) {
+    if (value === undefined || value === null || value === '') return null;
+    const num = Number(value);
+    if (!Number.isInteger(num) || num < 1) {
+        throw new Error(`${fieldName} must be a positive integer, if set`);
+    }
+    return num;
+}
+
 function normalizeCouponInput(payload) {
     if (!payload || typeof payload !== 'object') {
         throw new Error('Invalid coupon payload');
@@ -84,6 +95,12 @@ function normalizeCouponInput(payload) {
         throw new Error('maxRedemptions must be a positive integer, if set');
     }
 
+    // undefined = not specified (default 1 on create, preserved on update); null/'' = unlimited.
+    let maxRedemptionsPerCustomer;
+    if (payload.maxRedemptionsPerCustomer !== undefined) {
+        maxRedemptionsPerCustomer = normalizePerCustomerLimit(payload.maxRedemptionsPerCustomer, 'maxRedemptionsPerCustomer');
+    }
+
     const notes = payload.notes ? String(payload.notes) : null;
 
     const type = normalizeCouponType(payload.type);
@@ -98,7 +115,7 @@ function normalizeCouponInput(payload) {
     }
 
     return {
-        code, discountPercent, affiliateFeePercent, affiliateEmail, active, expiresAt, productIds, maxRedemptions, notes,
+        code, discountPercent, affiliateFeePercent, affiliateEmail, active, expiresAt, productIds, maxRedemptions, maxRedemptionsPerCustomer, notes,
         type, ghlLocationIds, localEnabled, ghlCouponMeta, origin
     };
 }
@@ -114,6 +131,7 @@ function rowToCoupon(row, productIds = []) {
         expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
         productIds,
         maxRedemptions: row.max_redemptions,
+        maxRedemptionsPerCustomer: row.max_redemptions_per_customer ?? null,
         notes: row.notes || '',
         ghlLocationIds: row.ghl_location_ids || null,
         localEnabled: row.local_enabled !== false,
@@ -175,7 +193,7 @@ async function upsertCoupon(payload) {
     try {
         await client.query('BEGIN');
 
-        const { rows: existingRows } = await client.query('SELECT type FROM coupons WHERE code = $1 FOR UPDATE', [c.code]);
+        const { rows: existingRows } = await client.query('SELECT type, max_redemptions_per_customer FROM coupons WHERE code = $1 FOR UPDATE', [c.code]);
         const existingType = existingRows[0]?.type;
         let type;
         if (c.type !== undefined) {
@@ -187,10 +205,17 @@ async function upsertCoupon(payload) {
             type = existingType || 'general';
         }
         const localEnabled = c.localEnabled === undefined ? true : c.localEnabled;
+        // Per-customer limit applies to general coupons only (affiliate coupons use the global
+        // setting). Not specified: default 1 on create, existing value kept on update.
+        let perCustomerLimit = null;
+        if (type !== 'affiliate') {
+            if (c.maxRedemptionsPerCustomer !== undefined) perCustomerLimit = c.maxRedemptionsPerCustomer;
+            else perCustomerLimit = existingRows[0] ? existingRows[0].max_redemptions_per_customer : 1;
+        }
 
         await client.query(
-            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, type, ghl_location_ids, local_enabled, ghl_coupon_meta, origin, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+            `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, affiliate_email, active, expires_at, max_redemptions, notes, type, ghl_location_ids, local_enabled, ghl_coupon_meta, origin, max_redemptions_per_customer, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
              ON CONFLICT (code) DO UPDATE SET
                 discount_percent = EXCLUDED.discount_percent,
                 affiliate_fee_percent = EXCLUDED.affiliate_fee_percent,
@@ -198,6 +223,7 @@ async function upsertCoupon(payload) {
                 active = EXCLUDED.active,
                 expires_at = EXCLUDED.expires_at,
                 max_redemptions = EXCLUDED.max_redemptions,
+                max_redemptions_per_customer = EXCLUDED.max_redemptions_per_customer,
                 notes = EXCLUDED.notes,
                 type = EXCLUDED.type,
                 ghl_location_ids = EXCLUDED.ghl_location_ids,
@@ -207,7 +233,7 @@ async function upsertCoupon(payload) {
             [
                 c.code, c.discountPercent, c.affiliateFeePercent, c.affiliateEmail, c.active, c.expiresAt, c.maxRedemptions, c.notes,
                 type, c.ghlLocationIds ?? null, localEnabled, c.ghlCouponMeta ? JSON.stringify(c.ghlCouponMeta) : null,
-                c.origin || 'local'
+                c.origin || 'local', perCustomerLimit
             ]
         );
         await client.query('DELETE FROM coupon_products WHERE coupon_code = $1', [c.code]);
@@ -344,18 +370,22 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
                 );
             }
 
-            const { rows: priorRows } = await db.query(
-                `SELECT 1 FROM coupon_redemptions cr
-                 JOIN coupons c2 ON c2.code = cr.code
-                 WHERE c2.type = 'affiliate'
-                   AND lower(cr.email) = $1
-                   AND cr.status = 'paid'
-                   AND cr.is_test = false
-                 LIMIT 1`,
-                [normalizedEmail]
-            );
-            if (priorRows.length > 0) {
-                return { error: 'You have already used an affiliate discount.', reason: 'affiliate_already_used' };
+            const affiliateLimit = await couponSettings.getAffiliateDiscountsPerCustomer(db);
+            if (affiliateLimit != null) {
+                const { rows: priorRows } = await db.query(
+                    `SELECT COUNT(*)::int AS count FROM coupon_redemptions cr
+                     JOIN coupons c2 ON c2.code = cr.code
+                     WHERE c2.type = 'affiliate'
+                       AND lower(cr.email) = $1
+                       AND cr.status = 'paid'
+                       AND cr.is_test = false`,
+                    [normalizedEmail]
+                );
+                if (priorRows[0].count >= affiliateLimit) {
+                    return affiliateLimit === 1
+                        ? { error: 'You have already used an affiliate discount.', reason: 'affiliate_already_used' }
+                        : { error: 'You have reached the limit for affiliate discounts.', reason: 'affiliate_already_used' };
+                }
             }
         } else {
             // Same idea as above, scoped to just this one code (the general-coupon rule
@@ -374,17 +404,21 @@ async function checkCouponRules(db, { couponRow, normalizedCode, productId, norm
                 );
             }
 
-            const { rows: priorRows } = await db.query(
-                `SELECT 1 FROM coupon_redemptions
-                 WHERE code = $1
-                   AND lower(email) = $2
-                   AND status = 'paid'
-                   AND is_test = false
-                 LIMIT 1`,
-                [normalizedCode, normalizedEmail]
-            );
-            if (priorRows.length > 0) {
-                return { error: 'You have already used this coupon.', reason: 'coupon_already_used' };
+            const perCustomerLimit = couponRow.max_redemptions_per_customer;
+            if (perCustomerLimit != null) {
+                const { rows: priorRows } = await db.query(
+                    `SELECT COUNT(*)::int AS count FROM coupon_redemptions
+                     WHERE code = $1
+                       AND lower(email) = $2
+                       AND status = 'paid'
+                       AND is_test = false`,
+                    [normalizedCode, normalizedEmail]
+                );
+                if (priorRows[0].count >= perCustomerLimit) {
+                    return perCustomerLimit === 1
+                        ? { error: 'You have already used this coupon.', reason: 'coupon_already_used' }
+                        : { error: 'You have reached the limit for this coupon.', reason: 'coupon_already_used' };
+                }
             }
         }
     }
@@ -732,14 +766,14 @@ async function flagPartialRefund(orderId) {
  * at local checkout. Idempotent (ON CONFLICT DO NOTHING - a concurrent/rerun never clobbers
  * an existing coupon). Returns true if a row was created.
  */
-async function createGhlDiscoveredCoupon({ code, discountPercent = 0, locationId }) {
+async function createGhlDiscoveredCoupon({ code, discountPercent = 0, locationId, limitPerCustomer = false }) {
     const normalizedCode = toCouponCode(code);
     const percent = Math.min(1, Math.max(0, Number(discountPercent) || 0));
     const { rowCount } = await pool.query(
-        `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, active, notes, type, ghl_location_ids, local_enabled, origin)
-         VALUES ($1,$2,0,true,'Discovered from GHL order','general',$3,false,'ghl')
+        `INSERT INTO coupons (code, discount_percent, affiliate_fee_percent, active, notes, type, ghl_location_ids, local_enabled, origin, max_redemptions_per_customer)
+         VALUES ($1,$2,0,true,'Discovered from GHL order','general',$3,false,'ghl',$4)
          ON CONFLICT (code) DO NOTHING`,
-        [normalizedCode, percent, locationId ? [locationId] : null]
+        [normalizedCode, percent, locationId ? [locationId] : null, limitPerCustomer ? 1 : null]
     );
     return rowCount > 0;
 }

@@ -7,7 +7,7 @@ import { apiFetch } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
 import { useToast } from "@/lib/useToast";
 
-type LegalSettings = { termsUrl: string | null; privacyUrl: string | null };
+type Settings = { termsUrl: string | null; privacyUrl: string | null; affiliateDiscountsPerCustomer: number | null };
 
 export default function SettingsPage() {
   const { ready, admin, requireAuth, handleAuthError, logout } = useAdminAuth();
@@ -15,11 +15,13 @@ export default function SettingsPage() {
 
   const [termsUrl, setTermsUrl] = useState("");
   const [privacyUrl, setPrivacyUrl] = useState("");
+  const [affiliateLimit, setAffiliateLimit] = useState("1");
 
   const load = useCallback(async (key: string) => {
-    const data = await apiFetch<{ settings: LegalSettings }>("/api/admin/settings", key);
+    const data = await apiFetch<{ settings: Settings }>("/api/admin/settings", key);
     setTermsUrl(data.settings.termsUrl || "");
     setPrivacyUrl(data.settings.privacyUrl || "");
+    setAffiliateLimit(data.settings.affiliateDiscountsPerCustomer != null ? String(data.settings.affiliateDiscountsPerCustomer) : "");
   }, []);
 
   useEffect(() => {
@@ -47,12 +49,18 @@ export default function SettingsPage() {
     const key = requireAuth();
     if (!key) return;
     try {
-      const data = await apiFetch<{ settings: LegalSettings }>("/api/admin/settings", key, {
+      const data = await apiFetch<{ settings: Settings }>("/api/admin/settings", key, {
         method: "PUT",
-        body: { termsUrl: termsUrl.trim(), privacyUrl: privacyUrl.trim() },
+        body: {
+          termsUrl: termsUrl.trim(),
+          privacyUrl: privacyUrl.trim(),
+          affiliateDiscountsPerCustomer: affiliateLimit.trim() ? Number(affiliateLimit) : null,
+        },
       });
       setTermsUrl(data.settings.termsUrl || "");
       setPrivacyUrl(data.settings.privacyUrl || "");
+      setAffiliateLimit(data.settings.affiliateDiscountsPerCustomer != null ? String(data.settings.affiliateDiscountsPerCustomer) : "");
+    setAffiliateLimit(data.settings.affiliateDiscountsPerCustomer != null ? String(data.settings.affiliateDiscountsPerCustomer) : "");
       toast("Saved.");
     } catch (err) {
       if (!handleAuthError(err)) toast((err as Error).message);
@@ -71,7 +79,7 @@ export default function SettingsPage() {
       <main className="mx-auto w-full max-w-3xl flex-1 px-5 py-5">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
           <div className="border-b border-white/10 bg-white/[.02] p-3.5">
-            <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Checkout legal links</h2>
+            <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Checkout &amp; coupon settings</h2>
           </div>
           <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 p-4">
             <p className="text-xs text-slate-400">
@@ -87,6 +95,17 @@ export default function SettingsPage() {
               <span className="mb-1.5 block text-xs font-semibold text-slate-300">Privacy Policy link</span>
               <input className="input" type="url" placeholder="https://example.com/privacy" maxLength={2048} value={privacyUrl}
                 onChange={(e) => setPrivacyUrl(e.target.value)} />
+            </label>
+            <h3 className="mt-2 border-t border-white/10 pt-4 text-xs font-bold uppercase tracking-wide text-slate-200">Affiliate coupons</h3>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-semibold text-slate-300">Affiliate discounts per customer</span>
+              <input className="input" type="number" min={1} step={1} value={affiliateLimit}
+                onChange={(e) => setAffiliateLimit(e.target.value)} />
+              <span className="mt-1 block text-xs text-slate-400">
+                How many affiliate discounts one customer (by email) can use in total, across all affiliate codes.
+                Leave blank for unlimited. Saving also updates GHL&apos;s &quot;limit per customer&quot; on affiliate coupons
+                (on only when this is 1).
+              </span>
             </label>
             <div className="flex justify-end">
               <button type="submit" className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-500 px-4 py-2.5 text-sm font-extrabold text-slate-950">

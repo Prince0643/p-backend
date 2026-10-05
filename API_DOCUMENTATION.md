@@ -392,6 +392,14 @@ Scripts: `node scripts/backfillGhlCouponOrders.js [--apply]` (full-history backf
 
 ---
 
+## Per-customer coupon limits (Admin)
+
+A customer is identified by lowercased email; only `status='paid'`, `is_test=false` redemptions count (this includes imported GHL orders, and refunded ones still count). Pending holds and test rows never count. `max_redemptions` (total cap across all customers) is unchanged.
+
+- **General coupons**: `maxRedemptionsPerCustomer` on `POST /api/admin/coupons` and `PUT /api/admin/coupons/:code` - a positive integer, or `null`/`''` for unlimited. Counted per code across all products. Omitted: default `1` on create, existing value kept on update. Invalid values (0, negatives, non-integers) return 400 `maxRedemptionsPerCustomer must be a positive integer, if set`. Rejection: reason `coupon_already_used`, message `You have already used this coupon.` (limit 1) or `You have reached the limit for this coupon.` (limit > 1); it reaches `/api/embed/quote` as `promo.message` and the checkout error like other coupon rejections. Migration: existing local general coupons are set to 1; GHL-sourced coupons take 1 only when `ghl_coupon_meta.limitPerCustomer` was stored as true, otherwise NULL (unlimited).
+- **Affiliate coupons**: ignore the per-coupon field (stored NULL). One global setting, `affiliateDiscountsPerCustomer`, in `GET`/`PUT /api/admin/settings` (positive integer, or `null`/`''` for unlimited; default 1; stored in `app_settings`), counted across ALL affiliate codes. Rejection: reason `affiliate_already_used`, `You have already used an affiliate discount.` (limit 1) or `You have reached the limit for affiliate discounts.`. Changing it re-pushes affiliate coupons to GHL in the background (non-fatal).
+- **GHL**: only the boolean `limitPerCustomer` exists. Limit 1 -> `true`; > 1 or unlimited -> `false`. Affiliate coupons use `true` only when the global setting is 1 (`couponNeedsUpdate` detects drift). For GHL-origin general coupons, editing the limit pushes `limitPerCustomer` to GHL only when the value actually changed (all other GHL fields preserved; failures never fail the save). Future GHL imports set 1 when GHL's `limitPerCustomer` is true, else unlimited.
+
 ## Per-checkout PayMongo TEST mode (Admin)
 
 The site is always **live**. There is no global switch. An admin can run a single checkout in PayMongo **test mode** (PayMongo test cards / e-wallets) to test forms end to end.

@@ -272,6 +272,29 @@ CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_email_lower ON coupon_redempti
 ALTER TABLE coupons ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'local';
 ALTER TABLE coupons DROP CONSTRAINT IF EXISTS coupons_origin_check;
 ALTER TABLE coupons ADD CONSTRAINT coupons_origin_check CHECK (origin IN ('local', 'ghl'));
+-- Per-customer redemption limit for GENERAL coupons (NULL = unlimited; affiliate coupons use the
+-- global app_settings 'affiliate_discounts_per_customer' instead and keep NULL here). The column is
+-- added WITHOUT a default and backfilled exactly once, inside the same DO block that adds it, so
+-- re-running this file never resets an admin's value. Local coupons start at 1 (the old hard-coded
+-- rule); GHL-sourced coupons (origin 'ghl' or imported with ghl_coupon_meta) take GHL's own
+-- limitPerCustomer when it was stored in ghl_coupon_meta (1 if true), otherwise NULL (unlimited).
+-- Nothing is pushed to GHL from here.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'coupons' AND column_name = 'max_redemptions_per_customer'
+    ) THEN
+        ALTER TABLE coupons ADD COLUMN max_redemptions_per_customer INTEGER
+            CHECK (max_redemptions_per_customer IS NULL OR max_redemptions_per_customer > 0);
+        UPDATE coupons SET max_redemptions_per_customer = 1
+            WHERE type = 'general' AND origin = 'local' AND ghl_coupon_meta IS NULL;
+        UPDATE coupons SET max_redemptions_per_customer = 1
+            WHERE type = 'general' AND (origin = 'ghl' OR ghl_coupon_meta IS NOT NULL)
+              AND lower(coalesce(ghl_coupon_meta->>'limitPerCustomer', '')) IN ('true', '1');
+    END IF;
+END $$;
+
 -- Per-location GHL push state for local affiliate coupons, keyed by location key
 -- ('global' | 'main'): { status: 'synced'|'pending'|'error', locationId, ghlCouponId, error, at }.
 ALTER TABLE coupons ADD COLUMN IF NOT EXISTS ghl_sync JSONB;

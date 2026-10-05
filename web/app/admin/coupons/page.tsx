@@ -24,6 +24,7 @@ type Coupon = {
   expiresAt: string | null;
   productIds: string[];
   maxRedemptions: number | null;
+  maxRedemptionsPerCustomer: number | null;
   notes: string;
 };
 
@@ -143,6 +144,7 @@ const emptyForm = {
   affiliateEmail: "",
   expiresAt: "",
   maxRedemptions: "",
+  maxRedemptionsPerCustomer: "1",
   productIds: "",
   active: "true",
   notes: "",
@@ -269,6 +271,7 @@ export default function CouponsPage() {
       affiliateEmail: c?.affiliateEmail || "",
       expiresAt: toLocalDatetimeValue(c?.expiresAt || null),
       maxRedemptions: c?.maxRedemptions != null ? String(c.maxRedemptions) : "",
+      maxRedemptionsPerCustomer: c ? (c.maxRedemptionsPerCustomer != null ? String(c.maxRedemptionsPerCustomer) : "") : "1",
       productIds: (c?.productIds || []).join(", "),
       active: c ? String(!!c.active) : "true",
       notes: c?.notes || "",
@@ -324,6 +327,7 @@ export default function CouponsPage() {
       // General coupons: no affiliate fee/email, but local checkout + GHL location scoping apply.
       payload.affiliateFeePercent = 0;
       payload.affiliateEmail = "";
+      payload.maxRedemptionsPerCustomer = form.maxRedemptionsPerCustomer.trim() ? Number(form.maxRedemptionsPerCustomer) : null;
       payload.localEnabled = form.localEnabled === "true";
       payload.ghlLocationIds = form.ghlAllLocations === "true" ? null : form.ghlLocationIds;
       if (!selectedCode) payload.type = "general";
@@ -666,6 +670,9 @@ export default function CouponsPage() {
                     {(c.discountPercent * 100).toFixed(0)}% off
                     {c.affiliateFeePercent ? ` · ${(c.affiliateFeePercent * 100).toFixed(0)}% affiliate fee` : ""} ·{" "}
                     {c.expiresAt ? `expires ${new Date(c.expiresAt).toLocaleString()}` : "no expiry"}
+                    {c.type === "general"
+                      ? ` · ${c.maxRedemptionsPerCustomer != null ? `${c.maxRedemptionsPerCustomer}/customer` : "unlimited per customer"}`
+                      : ""}
                   </div>
                   {c.affiliate && (
                     <div className="mt-1 text-[11px] text-slate-500">
@@ -708,8 +715,8 @@ export default function CouponsPage() {
               <div className="font-bold uppercase tracking-wide text-purple-200">Affiliate coupon</div>
               <p className="mt-1">
                 Affiliate codes are created automatically at registration; they carry the affiliate&apos;s fee, allow
-                unlimited customers, but each customer can use an affiliate discount only once ever — across all
-                affiliate codes.
+                unlimited customers, but how many affiliate discounts one customer can use in total (across all
+                affiliate codes) is set by &quot;Affiliate discounts per customer&quot; on the Settings page.
               </p>
               {selectedCoupon?.affiliate && (
                 <p className="mt-2 font-semibold text-purple-50">
@@ -743,6 +750,16 @@ export default function CouponsPage() {
             <Field label="Max redemptions" hint="Total limit across all customers. Leave blank for unlimited.">
               <input className="input" type="number" min={1} step={1} value={form.maxRedemptions}
                 onChange={(e) => setForm({ ...form, maxRedemptions: e.target.value })} />
+            </Field>
+            <Field
+              label="Max uses per customer"
+              hint={isAffiliateCoupon
+                ? "Not applicable to affiliate coupons: set \"Affiliate discounts per customer\" on the Settings page."
+                : "How many times one customer (by email) can use this code. Leave blank for unlimited."}
+            >
+              <input className="input" type="number" min={1} step={1} disabled={isAffiliateCoupon}
+                value={isAffiliateCoupon ? "" : form.maxRedemptionsPerCustomer}
+                onChange={(e) => setForm({ ...form, maxRedemptionsPerCustomer: e.target.value })} />
             </Field>
             <Field label="Eligible product IDs" hint="Comma-separated. Leave blank for all products.">
               <input className="input" value={form.productIds}

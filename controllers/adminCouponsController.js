@@ -10,7 +10,7 @@ const {
 const affiliateStore = require('../utils/affiliateStore');
 const ghlService = require('../services/ghlService');
 const { importGlobalOrders } = require('../services/ghlOrderImport');
-const { pushCouponSafe } = require('../services/ghlCouponPush');
+const { pushCouponSafe, pushLimitPerCustomerSafe } = require('../services/ghlCouponPush');
 const { toUsageRedemption, locationKeyMap } = require('./adminGhlCouponsController');
 
 exports.list = async (req, res) => {
@@ -120,6 +120,11 @@ exports.upsert = async (req, res) => {
         // Local affiliate coupons are mirrored to GHL GLOBAL + MAIN (non-fatal; failures
         // are recorded per location and retried by the scheduled import).
         if (saved.type === 'affiliate' && saved.origin === 'local') await pushCouponSafe(saved.code);
+        // A GHL-origin general coupon gets its limit pushed to GHL only when the admin changed it.
+        if (existing && saved.type === 'general' && saved.origin === 'ghl'
+            && existing.maxRedemptionsPerCustomer !== saved.maxRedemptionsPerCustomer) {
+            await pushLimitPerCustomerSafe(saved.code);
+        }
         res.json({ success: true, coupon: saved });
     } catch (err) {
         res.status(400).json({ error: err.message || 'Failed to save coupon' });

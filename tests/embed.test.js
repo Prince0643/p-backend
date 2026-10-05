@@ -286,6 +286,8 @@ test('GET /public/nx-embed.js is served cross-origin with a JS content type', as
 // run sequentially) and always restore the links they change.
 const TERMS = 'https://legal.example.com/terms';
 const PRIVACY = 'https://legal.example.com/privacy';
+// The settings payload also carries the (unrelated) affiliate limit; these tests only assert the legal links.
+const legalOnly = ({ termsUrl, privacyUrl }) => ({ termsUrl, privacyUrl });
 const putSettings = (body) => request(app).put('/api/admin/settings').set('x-api-key', ADMIN_KEY).send(body);
 const clearGlobals = () => putSettings({ termsUrl: '', privacyUrl: null });
 const txRow = async (paymentReference) =>
@@ -296,7 +298,7 @@ test('settings API: requires admin auth; GET returns the two links', async () =>
     assert.equal((await request(app).put('/api/admin/settings').send({ termsUrl: TERMS })).status, 401);
     const res = await request(app).get('/api/admin/settings').set('x-api-key', ADMIN_KEY);
     assert.equal(res.status, 200);
-    assert.deepEqual(Object.keys(res.body.settings).sort(), ['privacyUrl', 'termsUrl']);
+    assert.deepEqual(Object.keys(res.body.settings).sort(), ['affiliateDiscountsPerCustomer', 'privacyUrl', 'termsUrl']);
 });
 
 test('settings API: validates URLs (400, nothing saved), trims, supports partial update and clearing', async () => {
@@ -310,13 +312,13 @@ test('settings API: validates URLs (400, nothing saved), trims, supports partial
 
         const saved = await putSettings({ termsUrl: `  ${TERMS}  `, privacyUrl: PRIVACY });
         assert.equal(saved.status, 200, JSON.stringify(saved.body));
-        assert.deepEqual(saved.body.settings, { termsUrl: TERMS, privacyUrl: PRIVACY });
-        assert.deepEqual((await request(app).get('/api/admin/settings').set('x-api-key', ADMIN_KEY)).body.settings, { termsUrl: TERMS, privacyUrl: PRIVACY });
+        assert.deepEqual(legalOnly(saved.body.settings), { termsUrl: TERMS, privacyUrl: PRIVACY });
+        assert.deepEqual(legalOnly((await request(app).get('/api/admin/settings').set('x-api-key', ADMIN_KEY)).body.settings), { termsUrl: TERMS, privacyUrl: PRIVACY });
 
         const partial = await putSettings({ privacyUrl: null });
-        assert.deepEqual(partial.body.settings, { termsUrl: TERMS, privacyUrl: null });
+        assert.deepEqual(legalOnly(partial.body.settings), { termsUrl: TERMS, privacyUrl: null });
         const cleared = await putSettings({ termsUrl: '   ' });
-        assert.deepEqual(cleared.body.settings, { termsUrl: null, privacyUrl: null });
+        assert.deepEqual(legalOnly(cleared.body.settings), { termsUrl: null, privacyUrl: null });
     } finally {
         await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
     }

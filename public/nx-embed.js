@@ -37,7 +37,7 @@
     return;
   }
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';
   var DEFAULT_ACCENT = '#2563eb';
   var DEFAULT_BUTTON = 'Pay now';
   var DEFAULT_RADIUS = 10;
@@ -311,6 +311,7 @@
       '.errbox:empty{display:none}',
       '.testbanner{margin:0 0 16px;padding:12px 14px;background:#fef3c7;border:2px solid #b45309;border-radius:' + radius + 'px;color:#78350f;font-size:13px}',
       '.testbanner strong{display:block;font-size:15px;letter-spacing:.02em;color:#7c2d12}',
+      '.inst{margin:10px 0 0;text-align:center;font-size:12px;color:#4b5563}',
       '.foot{margin:14px 0 0;text-align:center;font-size:12px;color:#4b5563}',
       '.sk{border-radius:6px;background:linear-gradient(90deg,#f3f4f6 25%,#e5e7eb 37%,#f3f4f6 63%);background-size:400% 100%;animation:sh 1.4s ease infinite}',
       '@keyframes sh{0%{background-position:100% 50%}100%{background-position:0 50%}}',
@@ -634,6 +635,10 @@
 
       refs.button = h('button', { type: 'submit', 'class': 'pay' }, [h('span', { text: buttonText })]);
       form.appendChild(refs.button);
+      // Server-decided (embed API `installmentsAvailable`); static, not tied to promo-adjusted totals.
+      if (p.installmentsAvailable === true) {
+        form.appendChild(h('p', { 'class': 'inst', text: 'Pay in up to 12 months with an eligible credit card.' }));
+      }
       syncPayDisabled();
       card.appendChild(form);
       card.appendChild(h('p', { 'class': 'foot', text: testToken ? 'PayMongo TEST MODE \u2014 no real charge' : 'Secure payment via PayMongo' }));

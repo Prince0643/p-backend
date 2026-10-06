@@ -74,7 +74,8 @@ test('GET /api/embed/products/:id returns only the public fields; unknown id is 
     assert.deepEqual(res.body, {
         product: {
             id: ids.zero, name: 'Embed Zero Tax', currency: 'PHP', amountPhp: 1000, taxRate: 0,
-            billing: { type: 'one_time', interval: null }, displaySuffix: ' / once', termsUrl: null, privacyUrl: null
+            billing: { type: 'one_time', interval: null }, displaySuffix: ' / once', termsUrl: null, privacyUrl: null,
+            installmentsAvailable: false
         }
     });
     const missing = await request(app).get('/api/embed/products/nope_nope');
@@ -474,5 +475,43 @@ test('legacy create-payment-intent cannot be given a forged consent record', asy
         assert.equal((await txRow(res.body.paymentReference)).terms_accepted_at, null);
     } finally {
         await legalLinks.setGlobalLegalLinks(savedGlobalLinks);
+    }
+});
+
+test('GET /api/embed/products/:id installmentsAvailable follows the real checkout rules', async () => {
+    const keys = ['PAYMONGO_CARD_INSTALLMENTS_ENABLED', 'PAYMONGO_INSTALLMENTS_MIN_AMOUNT'];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    const mk = async (suffix, amountPhp, defaults = {}) => {
+        const id = `embed_inst_${suffix}_${SUFFIX}`;
+        createdProductIds.add(id);
+        await productCatalog.upsertProduct({ id, name: `Inst ${suffix}`, amountPhp, defaults: { taxRate: 0, ...defaults } });
+        return id;
+    };
+    const flag = async (id) => (await request(app).get(`/api/embed/products/${id}`)).body.product.installmentsAvailable;
+    try {
+        delete process.env.PAYMONGO_INSTALLMENTS_MIN_AMOUNT;
+        const all = await mk('all', 3500);
+        const qr = await mk('qr', 3500, { paymentMethod: 'qrph' }); // 'qrph' expands to ALL methods (incl. card)
+        const card = await mk('card', 3500, { paymentMethod: 'card' });
+        const gcash = await mk('gcash', 3500, { paymentMethod: 'gcash' });
+        const low = await mk('low', 2000);
+        const taxed = await mk('taxed', 2800, { taxRate: 0.12 }); // 3136 incl. tax >= 3000
+
+        process.env.PAYMONGO_CARD_INSTALLMENTS_ENABLED = 'true';
+        assert.equal(await flag(all), true);
+        assert.equal(await flag(qr), true);
+        assert.equal(await flag(card), true);
+        assert.equal(await flag(gcash), false);
+        assert.equal(await flag(low), false);
+        assert.equal(await flag(taxed), true);
+
+        process.env.PAYMONGO_INSTALLMENTS_MIN_AMOUNT = '5000';
+        assert.equal(await flag(all), false);
+
+        delete process.env.PAYMONGO_INSTALLMENTS_MIN_AMOUNT;
+        process.env.PAYMONGO_CARD_INSTALLMENTS_ENABLED = 'false';
+        assert.equal(await flag(all), false);
+    } finally {
+        for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     }
 });

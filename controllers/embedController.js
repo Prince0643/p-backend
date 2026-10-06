@@ -5,6 +5,8 @@ const { resolveLegalLinks } = require('../utils/legalLinks');
 const couponStore = require('../utils/couponStore');
 const { computePricing } = require('../utils/pricing');
 const { createPaymentIntent } = require('./paymentController');
+const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
+const { getCardInstallmentOptions } = require('../utils/cardInstallments');
 
 const money = (n) => Number(Number(n).toFixed(2));
 const str = (v, max = 500) => (v == null ? '' : String(v).trim().slice(0, max));
@@ -25,6 +27,32 @@ async function lookupProduct(rawId) {
     return { product };
 }
 
+// Display-only hint: will the real checkout offer card installments for this product?
+// Mirrors createPaymentIntent -> paymongoService: same helper, same method types
+// (product default paymentMethod via getCheckoutMethodTypes), same amount (computePricing
+// finalAmount = tax-inclusive, using the product's source - which also covers admin
+// test-mode checkouts, as they run the same path). Deliberately PRE-coupon: coupons are
+// entered later and the line stays static. The PAYMONGO_FILTER_METHOD_TYPES capability
+// filter is NOT applied (no PayMongo API call per config load): for 'all'/'qrph'/'card'
+// we assume the merchant has card enabled. Server decides; the browser never does.
+async function installmentsAvailableFor(product) {
+    try {
+        const paymentMethodTypes = await getCheckoutMethodTypes({
+            paymentMethod: product.defaults.paymentMethod || 'all',
+            enableCapabilityFilter: false
+        });
+        const { finalAmount } = computePricing({ product, source: product.defaults.source });
+        return Boolean(getCardInstallmentOptions({
+            paymentMethodTypes,
+            amountPhp: finalAmount,
+            currency: product.currency
+        }));
+    } catch (err) {
+        console.error('Embed installments check failed:', err.message);
+        return false;
+    }
+}
+
 exports.getProduct = async (req, res) => {
     try {
         const found = await lookupProduct(req.params.id);
@@ -41,7 +69,8 @@ exports.getProduct = async (req, res) => {
                 billing: billingOf(product),
                 displaySuffix: product.defaults.displaySuffix || '',
                 termsUrl,
-                privacyUrl
+                privacyUrl,
+                installmentsAvailable: await installmentsAvailableFor(product)
             }
         });
     } catch (err) {

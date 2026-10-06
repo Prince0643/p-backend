@@ -112,6 +112,8 @@ Optional:
 
 - `PAYMONGO_FILTER_METHOD_TYPES=true` (filters checkout/payment method list based on PayMongo merchant capabilities)
 - `PAYMONGO_CHECKOUT_ENABLE_BRANKAS_TYPES=true` (experimental: include `brankas_*` types in Checkout Session `payment_method_types`; auto-falls back if rejected)
+- `PAYMONGO_CARD_INSTALLMENTS_ENABLED=true` (default off: offer 0% card installments (3/6/12 months) on one-time PHP checkouts that include `card`; auto-retries without the option if PayMongo rejects it)
+- `PAYMONGO_INSTALLMENTS_MIN_AMOUNT=3000` (PHP minimum for offering installments; default 3000)
 - `DIAGNOSTIC_TOKEN=...` (protects diagnostic endpoints like `/api/payments/capabilities` via `x-diagnostic-token` header)
 
 Notes:

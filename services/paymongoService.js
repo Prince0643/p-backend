@@ -1,5 +1,6 @@
 // services/paymongoService.js
 const axios = require('axios');
+const { getCardInstallmentOptions, getInstallmentsMinAmountPhp } = require('../utils/cardInstallments');
 
 // Thrown when a TEST-mode client is requested but the PAYMONGO_TEST_* env vars are missing
 // (or the configured "test" secret is not actually a test key). Test mode NEVER falls back
@@ -183,9 +184,35 @@ class PayMongoService {
                 }
             };
 
+            // Optional card installments (env-gated; unchanged payload when not applicable).
+            const installmentOptions = getCardInstallmentOptions({
+                paymentMethodTypes: checkoutMethodTypes,
+                amountPhp: amount,
+                currency: formattedCurrency
+            });
+            if (installmentOptions) {
+                checkoutPayload.data.attributes.payment_method_options = installmentOptions;
+            }
+
+            const postSession = async (payload) => {
+                try {
+                    return await this.client.post('/checkout_sessions', payload);
+                } catch (err) {
+                    // Installments must never break checkout: retry once without payment_method_options.
+                    if (!payload.data.attributes.payment_method_options) throw err;
+                    console.log('Checkout session failed with card installments; retrying without payment_method_options:',
+                        err.response?.data?.errors?.[0]?.detail || err.message);
+                    const { payment_method_options, ...rest } = payload.data.attributes;
+                    return await this.client.post('/checkout_sessions', {
+                        ...payload,
+                        data: { ...payload.data, attributes: rest }
+                    });
+                }
+            };
+
             let checkoutResponse;
             try {
-                checkoutResponse = await this.client.post('/checkout_sessions', checkoutPayload);
+                checkoutResponse = await postSession(checkoutPayload);
             } catch (err) {
                 const types = checkoutPayload?.data?.attributes?.payment_method_types || [];
                 const hasBrankas = Array.isArray(types) && types.some((t) => String(t).startsWith('brankas_'));
@@ -207,7 +234,7 @@ class PayMongoService {
                         }
                     };
 
-                    checkoutResponse = await this.client.post('/checkout_sessions', retryPayload);
+                    checkoutResponse = await postSession(retryPayload);
                 } else {
                     throw err;
                 }
@@ -302,6 +329,23 @@ class PayMongoService {
         } catch (error) {
             console.error('PayMongo create checkout error:', error.response?.data || error.message);
             throw new Error('Failed to create checkout session');
+        }
+    }
+
+    // List card installment plans PayMongo offers for an amount (PHP). Non-fatal: returns [] below
+    // the installments minimum or on any error.
+    async getCardInstallmentPlans(amountPhp) {
+        const amount = Number(amountPhp);
+        if (!(amount >= getInstallmentsMinAmountPhp())) return [];
+        try {
+            const response = await this.client.get('/card_installment_plans', {
+                params: { amount: Math.round(amount * 100) }
+            });
+            const data = response?.data?.data;
+            return Array.isArray(data) ? data : [];
+        } catch (error) {
+            console.log('Non-fatal: unable to fetch card installment plans:', error.response?.data || error.message);
+            return [];
         }
     }
 

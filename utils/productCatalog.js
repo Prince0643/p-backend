@@ -52,6 +52,14 @@ function normalizeProductInput(product) {
         throw new Error('defaults.cancelUrl must start with http:// or https://');
     }
 
+    // Setup fee: first payment only, recurring products only (forced null for one-time). 0 = none.
+    let setupFeePhp = null;
+    if (product.setupFeePhp != null && product.setupFeePhp !== '') {
+        const fee = Number(product.setupFeePhp);
+        if (!Number.isFinite(fee) || fee < 0) throw new Error('setupFeePhp must be a non-negative number');
+        if (billingType === 'recurring' && fee > 0) setupFeePhp = Number(fee.toFixed(2));
+    }
+
     const taxRate = defaults.taxRate != null ? Number(defaults.taxRate) : null;
     if (taxRate != null && (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1)) {
         throw new Error('defaults.taxRate must be a number between 0 and 1');
@@ -64,6 +72,7 @@ function normalizeProductInput(product) {
         currency,
         billingType,
         billingInterval: billingType === 'recurring' ? interval : null,
+        setupFeePhp,
         paymentMethod: defaults.paymentMethod ? String(defaults.paymentMethod) : 'all',
         source: defaults.source ? String(defaults.source) : id,
         taxRate,
@@ -80,6 +89,7 @@ function rowToProduct(row) {
         id: row.id,
         name: row.name,
         amountPhp: Number(row.amount_php),
+        setupFeePhp: row.setup_fee_php != null && Number(row.setup_fee_php) > 0 ? Number(row.setup_fee_php) : null,
         currency: row.currency,
         billing: {
             type: row.billing_type,
@@ -116,12 +126,12 @@ async function findProduct({ productId, productName }) {
     return null;
 }
 
-const PRODUCT_COLUMNS = ['id', 'name', 'amount_php', 'currency', 'billing_type', 'billing_interval', 'default_payment_method', 'default_source', 'default_tax_rate', 'display_suffix', 'success_url', 'cancel_url', 'terms_url', 'privacy_url'];
+const PRODUCT_COLUMNS = ['id', 'name', 'amount_php', 'currency', 'billing_type', 'billing_interval', 'default_payment_method', 'default_source', 'default_tax_rate', 'display_suffix', 'success_url', 'cancel_url', 'terms_url', 'privacy_url', 'setup_fee_php'];
 
 function productParams(p) {
     return [
         p.id, p.name, p.amountPhp, p.currency, p.billingType, p.billingInterval,
-        p.paymentMethod, p.source, p.taxRate, p.displaySuffix, p.successUrl, p.cancelUrl, p.termsUrl, p.privacyUrl
+        p.paymentMethod, p.source, p.taxRate, p.displaySuffix, p.successUrl, p.cancelUrl, p.termsUrl, p.privacyUrl, p.setupFeePhp
     ];
 }
 
@@ -129,8 +139,8 @@ async function upsertProduct(payload) {
     const p = normalizeProductInput(payload);
 
     await pool.query(
-        `INSERT INTO products (id, name, amount_php, currency, billing_type, billing_interval, default_payment_method, default_source, default_tax_rate, display_suffix, success_url, cancel_url, terms_url, privacy_url, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
+        `INSERT INTO products (id, name, amount_php, currency, billing_type, billing_interval, default_payment_method, default_source, default_tax_rate, display_suffix, success_url, cancel_url, terms_url, privacy_url, setup_fee_php, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
          ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             amount_php = EXCLUDED.amount_php,
@@ -145,6 +155,9 @@ async function upsertProduct(payload) {
             cancel_url = EXCLUDED.cancel_url,
             terms_url = EXCLUDED.terms_url,
             privacy_url = EXCLUDED.privacy_url,
+            -- a payload without a fee must not wipe an admin-set one (one-time products always clear it)
+            setup_fee_php = CASE WHEN EXCLUDED.billing_type = 'one_time' THEN NULL
+                                 ELSE COALESCE(EXCLUDED.setup_fee_php, products.setup_fee_php) END,
             updated_at = now()`,
         productParams(p)
     );
@@ -157,7 +170,7 @@ async function createProduct(payload) {
     const p = normalizeProductInput(payload);
     const { rowCount } = await pool.query(
         `INSERT INTO products (${PRODUCT_COLUMNS.join(', ')}, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
          ON CONFLICT (id) DO NOTHING`,
         productParams(p)
     );
@@ -177,7 +190,7 @@ async function updateProduct(id, payload) {
             name = $2, amount_php = $3, currency = $4, billing_type = $5, billing_interval = $6,
             default_payment_method = $7, default_source = $8, default_tax_rate = $9,
             display_suffix = $10, success_url = $11, cancel_url = $12,
-            terms_url = $13, privacy_url = $14, updated_at = now()
+            terms_url = $13, privacy_url = $14, setup_fee_php = $15, updated_at = now()
          WHERE id = $1`,
         productParams(p)
     );
@@ -264,6 +277,7 @@ function buildHtmlSnippet(product, { backendUrl = 'https://api.nexistrydigitalso
 
 module.exports = {
     toSlugId,
+    normalizeProductInput,
     listProducts,
     findProduct,
     upsertProduct,

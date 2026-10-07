@@ -157,7 +157,8 @@ exports.createPaymentIntent = async (req, res) => {
             baseAmount,
             taxAmount,
             finalAmount,
-            fullPriceAmount
+            fullPriceAmount,
+            setupFeeAmount
         } = computePricing({
             product: catalogProduct,
             source,
@@ -166,7 +167,7 @@ exports.createPaymentIntent = async (req, res) => {
 
         if (appliedCoupon && couponReservationClient) {
             // computePricing's baseAmount is already the post-discount, pre-tax amount
-            // (catalog - discount), which is the commission basis.
+            // ((catalog + setup fee) - discount), which is the commission basis.
             const commissionBase = baseAmount;
             const affiliateFeeAmount = Number((commissionBase * appliedCoupon.affiliateFeePercent).toFixed(2));
             await couponStore.finalizeCouponReservation(couponReservationClient, {
@@ -234,6 +235,10 @@ exports.createPaymentIntent = async (req, res) => {
             // price even when the first payment was discounted (see the GHL invoice
             // schedule creation in handlePaymentSuccess below).
             fullPriceAmount: String(fullPriceAmount),
+
+            // First-payment setup fee line (tax-inclusive, after discount); omitted when there is
+            // none. Used to split the first GHL invoice - renewals never include it.
+            ...(setupFeeAmount > 0 ? { setupFeeAmount: String(setupFeeAmount) } : {}),
 
             // ADD: Referral information
             referredBy: String(referredBy || ''),
@@ -327,6 +332,7 @@ exports.createPaymentIntent = async (req, res) => {
             paymentMethodAllowed: paymentIntentAllowed,
             paymentMethodTypes: checkoutMethodTypes,
             metadata: flattenedMetadata,
+            setupFeeAmount,
             successUrl,
             failureUrl,
             cancelUrl
@@ -366,6 +372,7 @@ exports.createPaymentIntent = async (req, res) => {
             taxRate: taxRate,
             taxAmount: taxAmount,
             discountAmount: serverDiscountAmount,
+            setupFeeAmount,
             promoCode: appliedCoupon?.code || '',
             notes,
             businessName,
@@ -858,6 +865,9 @@ async function handlePaymentSuccess(attributes, { isTestEvent = false } = {}) {
                 const now = new Date();
                 const issueDate = now.toISOString().slice(0, 10);
                 const dueDate = issueDate;
+                // Tax-inclusive setup fee portion of this payment (see createPaymentIntent metadata).
+                const metaSetupFee = Number(metadata.setupFeeAmount);
+                const setupFeeAmount = Number.isFinite(metaSetupFee) && metaSetupFee > 0 && metaSetupFee < amount ? metaSetupFee : 0;
 
                 const invoice = await ghlService.createInvoice({
                     contactId,
@@ -875,10 +885,18 @@ async function handlePaymentSuccess(attributes, { isTestEvent = false } = {}) {
                             name: product ? String(product) : 'PayMongo Payment',
                             description: metadata.paymentReference ? `Ref: ${metadata.paymentReference}` : undefined,
                             currency: String(currency).toUpperCase(),
-                            amount,
+                            amount: setupFeeAmount > 0 ? Number((amount - setupFeeAmount).toFixed(2)) : amount,
                             qty: 1,
                             type: 'one_time'
-                        }
+                        },
+                        // First payment only: the recurring schedule below never includes this.
+                        ...(setupFeeAmount > 0 ? [{
+                            name: 'Setup fee',
+                            currency: String(currency).toUpperCase(),
+                            amount: setupFeeAmount,
+                            qty: 1,
+                            type: 'one_time'
+                        }] : [])
                     ].map(item => {
                         Object.keys(item).forEach(k => item[k] === undefined && delete item[k]);
                         return item;

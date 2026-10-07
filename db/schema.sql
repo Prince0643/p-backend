@@ -352,6 +352,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 ALTER TABLE products ADD COLUMN IF NOT EXISTS terms_url TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS privacy_url TEXT;
+-- One-time setup fee added to the FIRST payment of a recurring product (renewals stay at the
+-- monthly price). NULL/0 = no setup fee.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS setup_fee_php NUMERIC(12, 2) CHECK (setup_fee_php >= 0);
 ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
 ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS terms_url TEXT;
 ALTER TABLE digital_solutions_transactions ADD COLUMN IF NOT EXISTS privacy_url TEXT;

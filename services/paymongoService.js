@@ -97,7 +97,7 @@ class PayMongoService {
     }
 
     // Create a payment intent
-    async createPaymentIntent({ amount, currency, description, paymentMethodAllowed, metadata, paymentMethodTypes, successUrl, failureUrl, cancelUrl }) {
+    async createPaymentIntent({ amount, currency, description, paymentMethodAllowed, metadata, paymentMethodTypes, successUrl, failureUrl, cancelUrl, setupFeeAmount = 0 }) {
         try {
             const formattedCurrency = this.formatCurrency(currency);
 
@@ -159,21 +159,36 @@ class PayMongoService {
 
             // Step 2: Create checkout session
             console.log('3. Creating checkout session...');
+            // A setup fee is shown as its own line item; the product line takes the remainder so
+            // the line items always sum to the payment intent amount exactly (in centavos).
+            const totalCentavos = Math.floor(amount * 100);
+            const setupCentavos = Number(setupFeeAmount) > 0 ? Math.round(setupFeeAmount * 100) : 0;
+            const lineItems = [{
+                amount: totalCentavos - setupCentavos,
+                currency: formattedCurrency,
+                description,
+                name: description,
+                quantity: 1
+            }];
+            if (setupCentavos > 0 && setupCentavos < totalCentavos) {
+                lineItems.push({
+                    amount: setupCentavos,
+                    currency: formattedCurrency,
+                    description: 'Setup fee',
+                    name: 'Setup fee',
+                    quantity: 1
+                });
+            } else {
+                lineItems[0].amount = totalCentavos;
+            }
+
             const checkoutPayload = {
                 data: {
                     attributes: {
                         send_email_receipt: true,
                         show_description: true,
                         show_line_items: true,
-                        line_items: [
-                            {
-                                amount: Math.floor(amount * 100),
-                                currency: formattedCurrency,
-                                description,
-                                name: description,
-                                quantity: 1
-                            }
-                        ],
+                        line_items: lineItems,
                         payment_method_types: checkoutMethodTypes,
                         description,
                         metadata,

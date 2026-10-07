@@ -73,7 +73,7 @@ test('GET /api/embed/products/:id returns only the public fields; unknown id is 
     assert.equal(res.status, 200);
     assert.deepEqual(res.body, {
         product: {
-            id: ids.zero, name: 'Embed Zero Tax', currency: 'PHP', amountPhp: 1000, taxRate: 0,
+            id: ids.zero, name: 'Embed Zero Tax', currency: 'PHP', amountPhp: 1000, setupFeePhp: null, taxRate: 0,
             billing: { type: 'one_time', interval: null }, displaySuffix: ' / once', termsUrl: null, privacyUrl: null,
             installmentsAvailable: false
         }

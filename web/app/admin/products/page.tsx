@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
 import { EmbedPanel } from "@/components/EmbedPanel";
 import { GhlProductsPanel } from "@/components/GhlProductsPanel";
-import { ProductCouponConfigPanel } from "@/components/ProductCouponConfigPanel";
+import { ProductCouponConfigPanel, Switch } from "@/components/ProductCouponConfigPanel";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
 import { useAdminAuth } from "@/lib/useAdminAuth";
@@ -14,6 +14,7 @@ type Product = {
   id: string;
   name: string;
   amountPhp: number;
+  setupFeePhp?: number | null;
   currency: string;
   billing: { type: string; interval?: string };
   couponConfig?: { affiliateCouponsEnabled: boolean; disabledCouponCount: number };
@@ -33,6 +34,8 @@ const emptyForm = {
   id: "",
   name: "",
   amountPhp: "",
+  hasSetupFee: false,
+  setupFeePhp: "",
   taxRate: "",
   paymentMethod: "",
   source: "",
@@ -86,6 +89,8 @@ export default function ProductsPage() {
       id: p?.id || "",
       name: p?.name || "",
       amountPhp: p ? String(p.amountPhp) : "",
+      hasSetupFee: Boolean(p?.setupFeePhp),
+      setupFeePhp: p?.setupFeePhp ? String(p.setupFeePhp) : "",
       taxRate: p?.defaults?.taxRate != null ? String(p.defaults.taxRate) : "",
       paymentMethod: p?.defaults?.paymentMethod || "",
       source: p?.defaults?.source || "",
@@ -118,10 +123,17 @@ export default function ProductsPage() {
     const key = requireAuth();
     if (!key) return;
 
+    const setupFee = form.billingType === "recurring" && form.hasSetupFee ? Number(form.setupFeePhp) : null;
+    if (form.billingType === "recurring" && form.hasSetupFee && !(setupFee! > 0)) {
+      toast("Enter a setup fee greater than 0, or turn the setup fee off.");
+      return;
+    }
+
     const payload = {
       id: selectedId || form.id || slugify(form.name),
       name: form.name,
       amountPhp: Number(form.amountPhp),
+      setupFeePhp: setupFee,
       currency: "PHP",
       billing: { type: form.billingType },
       defaults: {
@@ -242,6 +254,11 @@ export default function ProductsPage() {
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   <div className="rounded-full border border-white/10 px-2.5 py-1 text-xs">Embed</div>
+                  {p.setupFeePhp ? (
+                    <div className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 text-[11px] text-cyan-200">
+                      Setup fee ₱{Number(p.setupFeePhp).toLocaleString()}
+                    </div>
+                  ) : null}
                   {p.couponConfig && p.couponConfig.affiliateCouponsEnabled === false && (
                     <div className="rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] text-amber-200">Affiliate off</div>
                   )}
@@ -314,11 +331,40 @@ export default function ProductsPage() {
             </Field>
             <Field label="Billing">
               <select className="input" value={form.billingType}
-                onChange={(e) => setForm({ ...form, billingType: e.target.value })}>
+                onChange={(e) => setForm({
+                  ...form,
+                  billingType: e.target.value,
+                  ...(e.target.value === "recurring" ? {} : { hasSetupFee: false, setupFeePhp: "" }),
+                })}>
                 <option value="one_time">One-time</option>
                 <option value="recurring">Recurring (GHL invoice schedule)</option>
               </select>
             </Field>
+            {form.billingType === "recurring" && (
+              <>
+                <div className="flex items-center justify-between gap-3 self-end rounded-lg border border-white/10 px-3 py-2">
+                  <span className="text-xs font-semibold text-slate-300">Add setup fee?</span>
+                  <Switch
+                    label="Add setup fee"
+                    checked={form.hasSetupFee}
+                    onChange={(v) => setForm({ ...form, hasSetupFee: v, setupFeePhp: v ? form.setupFeePhp : "" })}
+                  />
+                </div>
+                {form.hasSetupFee && (
+                  <Field
+                    label="Setup fee (₱)"
+                    hint={
+                      Number(form.setupFeePhp) > 0 && Number(form.amountPhp) > 0
+                        ? `First payment: ₱${(Number(form.amountPhp) + Number(form.setupFeePhp)).toLocaleString()} · then ₱${Number(form.amountPhp).toLocaleString()}/month (before tax/discounts)`
+                        : "Charged once, with the first payment only. Renewals stay at the monthly price."
+                    }
+                  >
+                    <input className="input" type="number" min="0" step="0.01" value={form.setupFeePhp}
+                      onChange={(e) => setForm({ ...form, setupFeePhp: e.target.value })} />
+                  </Field>
+                )}
+              </>
+            )}
             <Field label="Success URL">
               <input className="input" value={form.successUrl}
                 onChange={(e) => setForm({ ...form, successUrl: e.target.value })} />

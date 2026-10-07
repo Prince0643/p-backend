@@ -417,7 +417,9 @@
       var recurring = q.billing && q.billing.type === 'recurring';
       clear(refs.summary);
       refs.summary.classList.remove('busy');
-      refs.summary.appendChild(row('Subtotal', money(q.subtotal, cur)));
+      var setupFee = Number(q.setupFee) > 0 ? Number(q.setupFee) : 0;
+      refs.summary.appendChild(row(setupFee ? 'First month' : 'Subtotal', money(q.subtotal, cur)));
+      if (setupFee) refs.summary.appendChild(row('Setup fee', money(setupFee, cur)));
       if (Number(q.discountAmount) > 0) {
         var code = q.promo && q.promo.code ? q.promo.code : '';
         var pct = Number(q.discountPercent) > 0 ? ' ' + pctText(q.discountPercent) + '%' : '';

@@ -30,9 +30,9 @@ async function lookupProduct(rawId) {
 // Display-only hint: will the real checkout offer card installments for this product?
 // Mirrors createPaymentIntent -> paymongoService: same helper, same method types
 // (product default paymentMethod via getCheckoutMethodTypes), same amount (computePricing
-// finalAmount = tax-inclusive, using the product's source - which also covers admin
+// finalAmount = tax-inclusive and including any setup fee, using the product's source - which also covers admin
 // test-mode checkouts, as they run the same path). Deliberately PRE-coupon: coupons are
-// entered later and the line stays static. The PAYMONGO_FILTER_METHOD_TYPES capability
+// entered later and the line stays static (the setup fee IS counted). The PAYMONGO_FILTER_METHOD_TYPES capability
 // filter is NOT applied (no PayMongo API call per config load): for 'all'/'qrph'/'card'
 // we assume the merchant has card enabled. Server decides; the browser never does.
 async function installmentsAvailableFor(product) {
@@ -65,6 +65,7 @@ exports.getProduct = async (req, res) => {
                 name: product.name,
                 currency: product.currency,
                 amountPhp: product.amountPhp,
+                setupFeePhp: product.setupFeePhp,
                 taxRate: computePricing({ product, source: product.defaults.source }).taxRate,
                 billing: billingOf(product),
                 displaySuffix: product.defaults.displaySuffix || '',
@@ -117,6 +118,7 @@ exports.quote = async (req, res) => {
             billing,
             displaySuffix: product.defaults.displaySuffix || '',
             subtotal: money(pricing.catalogAmount),
+            setupFee: money(pricing.setupFee),
             discountPercent,
             discountAmount: money(pricing.discountAmount),
             taxRate: pricing.taxRate,

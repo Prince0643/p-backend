@@ -41,10 +41,12 @@ export function EmbedPanel({
   productId,
   onCopyFallbackToast,
   onTestCheckout,
+  version = 0,
 }: {
   productId: string;
   onCopyFallbackToast: (m: string) => void;
   onTestCheckout: (productId: string) => void;
+  version?: number;
 }) {
   const [backendUrl, setBackendUrl] = useState(DEFAULT_BACKEND);
   const [accent, setAccent] = useState(DEFAULT_ACCENT);
@@ -62,7 +64,7 @@ export function EmbedPanel({
     ? buildEmbed({ productId, backendUrl: origin, accent, buttonText, radius, apiBase: origin })
     : "";
   const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:16px;font-family:system-ui,sans-serif;background:#fff}</style></head><body>${previewMarkup}</body></html>`;
-  const previewKey = `${productId}|${accent}|${buttonText}|${radius}|${origin}`;
+  const previewKey = `${productId}|${accent}|${buttonText}|${radius}|${origin}|${version}`;
 
   async function handleCopy() {
     try {

@@ -65,6 +65,7 @@ export default function ProductsPage() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
+  const [previewVersion, setPreviewVersion] = useState(0);
 
   const loadProducts = useCallback(
     async (key: string) => {
@@ -155,6 +156,7 @@ export default function ProductsPage() {
         : "/api/admin/products";
       const data = await apiFetch<{ product: Product }>(path, key, { method, body: payload });
       toast("Saved.");
+      setPreviewVersion((v) => v + 1);
       await loadProducts(key);
       selectProduct(data.product);
     } catch (e) {
@@ -409,7 +411,7 @@ export default function ProductsPage() {
           <div className="h-px bg-white/10" />
 
           {selectedId ? (
-            <EmbedPanel productId={selectedId} onCopyFallbackToast={toast} onTestCheckout={handleTestCheckout} />
+            <EmbedPanel productId={selectedId} onCopyFallbackToast={toast} onTestCheckout={handleTestCheckout} version={previewVersion} />
           ) : (
             <p className="p-4 text-xs text-slate-400">Save or select a product to get its embed form.</p>
           )}

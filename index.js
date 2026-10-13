@@ -14,6 +14,7 @@ const adminProductRoutes = require('./routes/adminProducts');
 const adminProductCouponConfigRoutes = require('./routes/adminProductCouponConfig');
 const adminCouponRoutes = require('./routes/adminCoupons');
 const adminGhlCouponRoutes = require('./routes/adminGhlCoupons');
+const adminGhlFulfillmentRoutes = require('./routes/adminGhlFulfillment');
 const adminCampaignRoutes = require('./routes/adminCampaigns');
 const adminCampaignSiteRoutes = require('./routes/adminCampaignSites');
 const affiliateRoutes = require('./routes/affiliates');
@@ -112,6 +113,7 @@ app.use('/api/admin', adminProductRoutes);
 app.use('/api/admin', adminProductCouponConfigRoutes);
 app.use('/api/admin', adminCouponRoutes);
 app.use('/api/admin', adminGhlCouponRoutes);
+app.use('/api/admin', adminGhlFulfillmentRoutes);
 app.use('/api/admin', adminCampaignRoutes);
 app.use('/api/admin', adminCampaignSiteRoutes);
 app.use('/api/affiliates', affiliateRoutes);
@@ -141,6 +143,7 @@ if (hasExportedWebApp) {
         '/admin/coupons',
         '/admin/campaigns',
         '/admin/campaign-sites',
+        '/admin/ghl-fulfillment',
         '/admin/affiliates',
         '/admin/solutions',
         '/admin/settings',
@@ -169,6 +172,10 @@ if (hasExportedWebApp) {
 
     app.get('/admin/coupons', (req, res) => {
         res.sendFile(path.join(__dirname, 'public', 'admin', 'coupons', 'index.html'));
+    });
+
+    app.get('/admin/ghl-fulfillment', (req, res) => {
+        res.redirect('/admin/products');
     });
 
     app.get('/admin/affiliates', (req, res) => {

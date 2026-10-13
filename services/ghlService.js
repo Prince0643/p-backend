@@ -241,6 +241,68 @@ class GhlService {
         });
     }
 
+    locationClient(location, { version = '2021-07-28' } = {}) {
+        if (!location?.privateKey || !location?.locationId) {
+            throw new Error('GHL location privateKey and locationId are required');
+        }
+        return this.createClient({ privateKey: location.privateKey, locationId: location.locationId, version });
+    }
+
+    async upsertContactInLocation(location, { fullName, email, phone, tags = [], customFields = [], source }) {
+        const client = this.locationClient(location, { version: '2021-07-28' });
+        const name = String(fullName || '').trim();
+        const [firstName, ...rest] = name.split(' ').filter(Boolean);
+        const lastName = rest.join(' ');
+        const normalizedPhone = this.normalizePhoneE164(phone);
+
+        const payload = {
+            firstName: firstName || name || undefined,
+            lastName: lastName || undefined,
+            name: name || undefined,
+            email: email || undefined,
+            phone: normalizedPhone || undefined,
+            locationId: location.locationId,
+            tags: Array.isArray(tags) && tags.length ? tags : undefined,
+            customFields: Array.isArray(customFields) && customFields.length ? customFields : undefined,
+            source: source || undefined
+        };
+        Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+
+        const res = await client.post('/contacts/upsert', payload);
+        return res.data;
+    }
+
+    async updateContactCustomFields(location, { contactId, customFields }) {
+        if (!contactId) throw new Error('contactId is required');
+        if (!Array.isArray(customFields) || customFields.length === 0) return null;
+        const client = this.locationClient(location, { version: '2021-07-28' });
+        const res = await client.put(`/contacts/${contactId}`, { customFields });
+        return res.data;
+    }
+
+    async addContactTags(location, { contactId, tags }) {
+        if (!contactId) throw new Error('contactId is required');
+        const cleanTags = Array.isArray(tags) ? tags.filter(Boolean) : [];
+        if (cleanTags.length === 0) return null;
+        const client = this.locationClient(location, { version: '2021-04-15' });
+        const res = await client.post(`/contacts/${contactId}/tags`, { tags: cleanTags });
+        return res.data;
+    }
+
+    async removeContactTags(location, { contactId, tags }) {
+        if (!contactId) throw new Error('contactId is required');
+        const cleanTags = Array.isArray(tags) ? tags.filter(Boolean) : [];
+        if (cleanTags.length === 0) return null;
+        const client = this.locationClient(location, { version: 'v3' });
+        const res = await client.post('/contacts/bulk/tags/update/remove', {
+            contacts: [contactId],
+            tags: cleanTags,
+            locationId: location.locationId,
+            removeAllTags: false
+        });
+        return res.data;
+    }
+
     normalizeCoupon(coupon, location) {
         return {
             id: coupon._id || coupon.id || coupon.couponId || '',

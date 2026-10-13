@@ -11,6 +11,7 @@ const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleSto
 const couponStore = require('../utils/couponStore');
 const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 const ghlStudentUsers = require('../services/ghlStudentUsers');
+const ghlFulfillment = require('../services/ghlFulfillment');
 const { resolveCheckoutMode, respondModeError, testPayloadFlags } = require('../utils/testMode');
 
 async function resolveCatalogProduct({ productId, productName }) {
@@ -1013,6 +1014,17 @@ async function handlePaymentSuccess(attributes, { isTestEvent = false } = {}) {
         }
     } catch (err) {
         console.log('GHL sync error (non-fatal):', err.response?.data || err.message);
+    }
+
+    // Product access fulfillment: admin-configured per-product GHL sub-account routing,
+    // tags, removals, and custom field updates. Emails remain owned by GHL workflows.
+    try {
+        const fulfillment = await ghlFulfillment.fulfillPayment({ metadata, paymentData, isTest: isTestEvent });
+        if (!fulfillment.skipped) {
+            console.log('GHL product fulfillment results:', fulfillment.results);
+        }
+    } catch (err) {
+        console.log('GHL product fulfillment error (non-fatal):', err.response?.data || err.message);
     }
 
     // GHL Practice Access / Premium: create the buyer as a GHL user in the Students sub-account

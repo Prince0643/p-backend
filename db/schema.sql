@@ -191,6 +191,54 @@ CREATE TABLE IF NOT EXISTS ghl_invoice_schedules (
     PRIMARY KEY (location_id, contact_id, product_id)
 );
 
+-- Admin-managed GHL sub-accounts used by the PayMongo fulfillment layer. These are
+-- separate from the env-backed MAIN/GLOBAL locations used by coupon/order imports so
+-- product access can be routed per product without changing deploy-time env vars.
+CREATE TABLE IF NOT EXISTS ghl_sub_accounts (
+    id                      TEXT PRIMARY KEY,
+    name                    TEXT NOT NULL,
+    location_id             TEXT NOT NULL UNIQUE,
+    private_key             TEXT NOT NULL,
+    business_name           TEXT,
+    active                  BOOLEAN NOT NULL DEFAULT true,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ghl_sub_accounts_active ON ghl_sub_accounts(active);
+
+-- Per-local-product fulfillment actions. A rule means: when this PayMongo product is
+-- paid, create/update the buyer in this GHL sub-account, apply tags/custom fields, and
+-- record an event. Emails stay in GHL workflows and are intentionally not represented.
+CREATE TABLE IF NOT EXISTS product_fulfillment_rules (
+    product_id              TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    sub_account_id          TEXT NOT NULL REFERENCES ghl_sub_accounts(id) ON DELETE CASCADE,
+    enabled                 BOOLEAN NOT NULL DEFAULT true,
+    first_payment_tags      TEXT[] NOT NULL DEFAULT '{}',
+    renewal_tags            TEXT[] NOT NULL DEFAULT '{}',
+    every_payment_tags      TEXT[] NOT NULL DEFAULT '{}',
+    remove_tags             TEXT[] NOT NULL DEFAULT '{}',
+    custom_fields           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (product_id, sub_account_id)
+);
+CREATE INDEX IF NOT EXISTS idx_product_fulfillment_rules_enabled ON product_fulfillment_rules(enabled);
+
+CREATE TABLE IF NOT EXISTS product_fulfillment_events (
+    id                      TEXT PRIMARY KEY,
+    product_id              TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    sub_account_id          TEXT NOT NULL REFERENCES ghl_sub_accounts(id) ON DELETE CASCADE,
+    payment_reference       TEXT NOT NULL,
+    customer_email          TEXT NOT NULL,
+    cycle_type              TEXT NOT NULL CHECK (cycle_type IN ('availed', 'renewed')),
+    contact_id              TEXT,
+    status                  TEXT NOT NULL DEFAULT 'succeeded' CHECK (status IN ('succeeded', 'failed')),
+    error                   TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_product_fulfillment_events_payment_rule ON product_fulfillment_events(payment_reference, product_id, sub_account_id);
+CREATE INDEX IF NOT EXISTS idx_product_fulfillment_events_customer_product ON product_fulfillment_events(customer_email, product_id, sub_account_id, status);
+
 -- Admin-created, named custom links attributing traffic/sales to one affiliate via
 -- their coupon code. Link = destination_url + ?ref=<coupon_code>&campaign=<slug>,
 -- computed on read (see utils/campaignStore.js) rather than stored, so it always

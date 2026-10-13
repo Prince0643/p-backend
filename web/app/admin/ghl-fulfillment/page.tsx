@@ -80,6 +80,7 @@ export default function GhlFulfillmentPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [accountForm, setAccountForm] = useState(emptyAccount);
   const [ruleForm, setRuleForm] = useState(emptyRule);
+  const [routeProductId, setRouteProductId] = useState("");
 
   const load = useCallback(async (key: string) => {
     const [cfg, prods] = await Promise.all([
@@ -101,6 +102,15 @@ export default function GhlFulfillmentPage() {
   }, [ready]);
 
   const productById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
+  const rulesByRoute = useMemo(() => {
+    const map = new Map<string, Rule>();
+    for (const rule of rules) map.set(`${rule.productId}:${rule.subAccountId}`, rule);
+    return map;
+  }, [rules]);
+
+  function getRouteRule(productId: string, subAccountId: string) {
+    return rulesByRoute.get(`${productId}:${subAccountId}`) || null;
+  }
 
   async function handleRefresh() {
     const key = requireAuth();
@@ -194,6 +204,53 @@ export default function GhlFulfillmentPage() {
     }
   }
 
+  async function toggleRoute(subAccount: SubAccount, shouldEnable: boolean) {
+    const key = requireAuth();
+    if (!key) return;
+    if (!routeProductId) {
+      toast("Select a product first.");
+      return;
+    }
+
+    const existing = getRouteRule(routeProductId, subAccount.id);
+    try {
+      if (shouldEnable) {
+        await apiFetch("/api/admin/ghl-fulfillment/rules", key, {
+          method: "POST",
+          body: {
+            productId: routeProductId,
+            subAccountId: subAccount.id,
+            enabled: true,
+            firstPaymentTags: existing?.firstPaymentTags || [],
+            renewalTags: existing?.renewalTags || [],
+            everyPaymentTags: existing?.everyPaymentTags || [],
+            removeTags: existing?.removeTags || [],
+            customFields: existing?.customFields || [],
+          },
+        });
+        await load(key);
+        toast("Route enabled.");
+        return;
+      }
+
+      if (!existing) return;
+      const hasAdvancedConfig =
+        existing.firstPaymentTags.length > 0 ||
+        existing.renewalTags.length > 0 ||
+        existing.everyPaymentTags.length > 0 ||
+        existing.removeTags.length > 0 ||
+        existing.customFields.length > 0;
+      if (hasAdvancedConfig && !confirm("This route has tags or custom fields configured. Removing it will delete that config. Continue?")) {
+        return;
+      }
+      await apiFetch(`/api/admin/ghl-fulfillment/rules/${encodeURIComponent(existing.productId)}/${encodeURIComponent(existing.subAccountId)}`, key, { method: "DELETE" });
+      await load(key);
+      toast("Route removed.");
+    } catch (e) {
+      if (!handleAuthError(e)) toast((e as Error).message);
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col">
       <AdminTopbar title="Nexistry Backend" subtitle="GHL Product Access" adminEmail={admin?.email} onRefresh={handleRefresh} onLogout={logout} />
@@ -256,7 +313,50 @@ export default function GhlFulfillmentPage() {
           <div className="border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">Product access rules</h2>
           </div>
+          <div className="grid gap-3 border-b border-white/10 p-4">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-200">Route product to sub-accounts</h3>
+              <p className="mt-1 text-xs text-slate-400">
+                Checked sub-accounts receive a contact create/update for every paid checkout of the selected PayMongo product.
+              </p>
+            </div>
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-semibold text-slate-300">Product</span>
+              <select className="input" value={routeProductId} onChange={(e) => setRouteProductId(e.target.value)}>
+                <option value="">Select product</option>
+                {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+            <div className="grid gap-2">
+              {subAccounts.map((a) => {
+                const route = routeProductId ? getRouteRule(routeProductId, a.id) : null;
+                const checked = Boolean(route && route.enabled);
+                return (
+                  <label key={a.id} className="flex min-h-12 items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[.03] px-3 py-2 text-sm">
+                    <span>
+                      <span className="block font-semibold text-slate-100">{a.name}</span>
+                      <span className="block font-mono text-xs text-slate-500">{a.locationId}</span>
+                    </span>
+                    <span className="flex items-center gap-3">
+                      {route && !route.enabled && <span className="text-xs font-semibold text-amber-200">disabled</span>}
+                      <input
+                        type="checkbox"
+                        disabled={!routeProductId || !a.active}
+                        checked={checked}
+                        onChange={(e) => toggleRoute(a, e.target.checked)}
+                      />
+                    </span>
+                  </label>
+                );
+              })}
+              {subAccounts.length === 0 && <div className="text-sm text-slate-400">Add a GHL sub-account first.</div>}
+            </div>
+          </div>
           <form onSubmit={saveRule} className="grid gap-3 p-4">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-200">Advanced tags and fields</h3>
+              <p className="mt-1 text-xs text-slate-400">Edit a route when it needs access tags, expired-tag cleanup, or custom field values.</p>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className="mb-1.5 block text-xs font-semibold text-slate-300">Product</span>

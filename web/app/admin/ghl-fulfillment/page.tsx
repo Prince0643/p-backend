@@ -140,6 +140,18 @@ export default function GhlFulfillmentPage() {
     }
   }
 
+  async function importEnvSubAccounts() {
+    const key = requireAuth();
+    if (!key) return;
+    try {
+      const data = await apiFetch<{ count: number }>("/api/admin/ghl-fulfillment/import-env", key, { method: "POST" });
+      await load(key);
+      toast(data.count ? `Imported ${data.count} sub-account${data.count === 1 ? "" : "s"}.` : "No env sub-accounts found.");
+    } catch (e) {
+      if (!handleAuthError(e)) toast((e as Error).message);
+    }
+  }
+
   async function deleteAccount(id: string) {
     if (!confirm(`Delete GHL sub-account "${id}" and its product rules?`)) return;
     const key = requireAuth();
@@ -256,10 +268,16 @@ export default function GhlFulfillmentPage() {
       <AdminTopbar title="Nexistry Backend" subtitle="GHL Product Access" adminEmail={admin?.email} onRefresh={handleRefresh} onLogout={logout} />
       <main className="mx-auto grid w-full max-w-6xl flex-1 grid-cols-1 gap-4 px-5 py-5 xl:grid-cols-[0.9fr_1.1fr]">
         <section className="rounded-2xl border border-white/10 bg-white/[.03] shadow-2xl">
-          <div className="border-b border-white/10 bg-white/[.02] p-3.5">
+          <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/[.02] p-3.5">
             <h2 className="text-xs font-bold uppercase tracking-wide text-slate-200">GHL sub-accounts</h2>
+            <button onClick={importEnvSubAccounts} className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-bold text-slate-100 hover:bg-white/10">
+              Import env
+            </button>
           </div>
           <form onSubmit={saveAccount} className="grid gap-3 p-4">
+            <p className="text-xs text-slate-400">
+              Use the GHL sub-account/location ID and its Private Integration Token. The buyer will be created or updated in every sub-account checked for a product.
+            </p>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className="mb-1.5 block text-xs font-semibold text-slate-300">Name</span>
@@ -272,7 +290,8 @@ export default function GhlFulfillmentPage() {
             </div>
             <label className="block">
               <span className="mb-1.5 block text-xs font-semibold text-slate-300">Location ID</span>
-              <input className="input font-mono" value={accountForm.locationId} onChange={(e) => setAccountForm({ ...accountForm, locationId: e.target.value })} />
+              <input className="input font-mono" value={accountForm.locationId} onChange={(e) => setAccountForm({ ...accountForm, locationId: e.target.value })} placeholder="e.g. nb61f4OQ7o9Wsxx0zOsY" />
+              <span className="mt-1 block text-xs text-slate-500">This is not the GHL login email.</span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-xs font-semibold text-slate-300">Private Integration Token</span>

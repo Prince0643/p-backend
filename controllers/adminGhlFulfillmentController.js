@@ -1,4 +1,52 @@
 const store = require('../utils/ghlFulfillmentStore');
+const ghlService = require('../services/ghlService');
+
+function slug(input) {
+    return String(input || '')
+        .trim()
+        .toLowerCase()
+        .replace(/['"]/g, '')
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 80);
+}
+
+function uniqueLocations(locations) {
+    const seen = new Set();
+    return locations.filter((location) => {
+        if (!location?.locationId || !location?.privateKey) return false;
+        if (seen.has(location.locationId)) return false;
+        seen.add(location.locationId);
+        return true;
+    });
+}
+
+function envSubAccounts() {
+    const configured = [];
+    const main = ghlService.resolveMainLocation();
+    if (main) configured.push({ id: 'main', name: main.name || 'Main', ...main });
+    const global = ghlService.resolveGlobalLocation();
+    if (global) configured.push({ id: 'global', name: global.name || 'Nexistry Core Global', ...global });
+    for (const location of ghlService.getConfiguredLocations()) {
+        configured.push({ id: slug(location.name || location.locationId), ...location });
+    }
+    if (process.env.GHL_LOCATION_ID_NEXISTRY_ACADEMY_STUDENTS && process.env.GHL_PRIVATE_KEY_NEXISTRY_ACADEMY_STUDENTS) {
+        configured.push({
+            id: 'nexistry_academy_students',
+            name: 'Nexistry Academy Students',
+            locationId: process.env.GHL_LOCATION_ID_NEXISTRY_ACADEMY_STUDENTS,
+            privateKey: process.env.GHL_PRIVATE_KEY_NEXISTRY_ACADEMY_STUDENTS
+        });
+    }
+    return uniqueLocations(configured).map((location) => ({
+        id: location.id || slug(location.name || location.locationId),
+        name: location.name || location.locationId,
+        locationId: location.locationId,
+        privateKey: location.privateKey,
+        businessName: location.name || '',
+        active: true
+    }));
+}
 
 exports.list = async (req, res) => {
     try {
@@ -18,6 +66,19 @@ exports.saveSubAccount = async (req, res) => {
         res.json({ success: true, subAccount });
     } catch (err) {
         res.status(400).json({ error: err.message || 'Failed to save GHL sub-account' });
+    }
+};
+
+exports.importEnvSubAccounts = async (req, res) => {
+    try {
+        const locations = envSubAccounts();
+        const imported = [];
+        for (const location of locations) {
+            imported.push(await store.upsertSubAccount(location));
+        }
+        res.json({ success: true, imported, count: imported.length });
+    } catch (err) {
+        res.status(400).json({ error: err.message || 'Failed to import env GHL sub-accounts' });
     }
 };
 

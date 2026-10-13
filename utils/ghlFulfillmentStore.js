@@ -94,8 +94,17 @@ async function getSubAccount(id, { includeSecret = false } = {}) {
     return rows[0] ? rowToSubAccount(rows[0], { includeSecret }) : null;
 }
 
+async function getSubAccountByLocationId(locationId, { includeSecret = false } = {}) {
+    const { rows } = await pool.query('SELECT * FROM ghl_sub_accounts WHERE location_id = $1', [String(locationId)]);
+    return rows[0] ? rowToSubAccount(rows[0], { includeSecret }) : null;
+}
+
 async function upsertSubAccount(input) {
     const a = normalizeSubAccount(input);
+    const existingForLocation = await getSubAccountByLocationId(a.locationId, { includeSecret: true });
+    if (existingForLocation && existingForLocation.id !== a.id) {
+        a.id = existingForLocation.id;
+    }
     const { rows } = await pool.query(
         `INSERT INTO ghl_sub_accounts (id, name, location_id, private_key, business_name, active, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6, now())
@@ -232,6 +241,7 @@ module.exports = {
     normalizeCustomFields,
     listSubAccounts,
     getSubAccount,
+    getSubAccountByLocationId,
     upsertSubAccount,
     deleteSubAccount,
     listRules,

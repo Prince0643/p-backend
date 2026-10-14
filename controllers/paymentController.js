@@ -1,13 +1,11 @@
 // controllers/paymentController.js
 const paymongoService = require('../services/paymongoService');
 const webhookService = require('../services/webhookService');
-const ghlService = require('../services/ghlService');
 const clockistryController = require('./clockistryController');
 const { generateId, validateEmail, validateMobile } = require('../utils/helpers');
 const { computePricing } = require('../utils/pricing');
 const { getCheckoutMethodTypes } = require('../utils/paymongoMethodTypes');
 const { findProduct } = require('../utils/productCatalog');
-const { getScheduleId, setScheduleId } = require('../utils/ghlInvoiceScheduleStore');
 const couponStore = require('../utils/couponStore');
 const digitalSolutionsStore = require('../utils/digitalSolutionsStore');
 const ghlStudentUsers = require('../services/ghlStudentUsers');
@@ -832,192 +830,8 @@ async function handlePaymentSuccess(attributes, { isTestEvent = false } = {}) {
         }
     }
 
-    // Test payments never touch the MAIN GHL location: no contact upsert, no invoice, no
-    // invoice schedule (those would be real GHL records for fake money).
-    try {
-        if (isTestEvent) {
-            console.log('PayMongo TEST payment - skipping GHL contact upsert and invoice mirroring');
-        } else if (process.env.GHL_PRIVATE_KEY && process.env.GHL_LOCATION_ID) {
-            const amountCentavos = Number(paymentData.attributes?.amount);
-            const currency = paymentData.attributes?.currency || 'PHP';
-            // Convert centavos to whole currency units with decimals preserved (e.g., 165000 -> 1650.00)
-            const amount = Number.isFinite(amountCentavos) ? (amountCentavos / 100) : undefined;
-
-            const fullName = metadata.fullName;
-            const email = metadata.email;
-            const phone = metadata.mobile;
-            const product = metadata.product;
-            const productId = metadata.productId;
-            const catalogProduct = await resolveCatalogProduct({ productId, productName: product });
-
-            const upsertResult = await ghlService.upsertContact({
-                fullName,
-                email,
-                phone
-            });
-
-            const contactId = upsertResult?.contact?.id || upsertResult?.id || upsertResult?.contactId;
-
-            if (!contactId) {
-                console.log('GHL upsertContact did not return contact id, skipping invoice creation');
-            } else if (!amount) {
-                console.log('PayMongo amount missing, skipping invoice creation');
-            } else {
-                const now = new Date();
-                const issueDate = now.toISOString().slice(0, 10);
-                const dueDate = issueDate;
-                // Tax-inclusive setup fee portion of this payment (see createPaymentIntent metadata).
-                const metaSetupFee = Number(metadata.setupFeeAmount);
-                const setupFeeAmount = Number.isFinite(metaSetupFee) && metaSetupFee > 0 && metaSetupFee < amount ? metaSetupFee : 0;
-
-                const invoice = await ghlService.createInvoice({
-                    contactId,
-                    contactDetails: {
-                        name: fullName,
-                        phoneNo: phone,
-                        email
-                    },
-                    name: product ? String(product) : 'PayMongo Payment',
-                    currency: String(currency).toUpperCase(),
-                    issueDate,
-                    dueDate,
-                    items: [
-                        {
-                            name: product ? String(product) : 'PayMongo Payment',
-                            description: metadata.paymentReference ? `Ref: ${metadata.paymentReference}` : undefined,
-                            currency: String(currency).toUpperCase(),
-                            amount: setupFeeAmount > 0 ? Number((amount - setupFeeAmount).toFixed(2)) : amount,
-                            qty: 1,
-                            type: 'one_time'
-                        },
-                        // First payment only: the recurring schedule below never includes this.
-                        ...(setupFeeAmount > 0 ? [{
-                            name: 'Setup fee',
-                            currency: String(currency).toUpperCase(),
-                            amount: setupFeeAmount,
-                            qty: 1,
-                            type: 'one_time'
-                        }] : [])
-                    ].map(item => {
-                        Object.keys(item).forEach(k => item[k] === undefined && delete item[k]);
-                        return item;
-                    })
-                });
-
-                console.log('GHL invoice created:', invoice?.id || invoice?.invoice?.id || invoice);
-
-                const invoiceId = invoice?.invoice?._id || invoice?._id || invoice?.id;
-                if (invoiceId) {
-                    try {
-                        const paySource = paymentData.attributes?.source || {};
-                        const cardBrand = paySource?.brand || paySource?.card_brand;
-                        const cardLast4 = paySource?.last4 || paySource?.last_4;
-
-                        const paymentResult = await ghlService.recordInvoicePayment({
-                            invoiceId,
-                            amount,
-                            mode: 'card',
-                            cardBrand,
-                            cardLast4,
-                            notes: `PayMongo payment ${paymentData.id}`,
-                            fulfilledAt: new Date().toISOString()
-                        });
-                        console.log('GHL payment recorded, transaction created:', paymentResult?.id || paymentResult?.transaction?.id || 'OK');
-                    } catch (payErr) {
-                        console.log('GHL record-payment error (non-fatal):', payErr.response?.data || payErr.message);
-                    }
-                } else {
-                    console.log('GHL invoice created but no invoiceId found for record-payment');
-                }
-
-                // Optional: Create recurring invoice schedule in GHL (recurring invoices, not recurring PayMongo charges)
-                try {
-                    const isRecurring = String(catalogProduct?.billing?.type || 'one_time') === 'recurring';
-                    if (isRecurring && contactId && catalogProduct?.id) {
-                        const existingScheduleId = await getScheduleId({
-                            locationId: process.env.GHL_LOCATION_ID,
-                            contactId,
-                            productId: catalogProduct.id
-                        });
-
-                        if (existingScheduleId) {
-                            console.log('GHL invoice schedule already exists for contact/product:', existingScheduleId);
-                        } else {
-                            const now = new Date();
-                            const start = new Date(now);
-                            const targetMonth = start.getMonth() + 1;
-                            start.setMonth(targetMonth);
-                            // Clamp day-of-month if next month is shorter
-                            if (start.getMonth() !== (targetMonth % 12)) {
-                                start.setDate(0);
-                            }
-                            const startAt = start.toISOString().slice(0, 10);
-
-                            // Renewals always bill at the product's FULL (undiscounted)
-                            // price - a coupon only ever discounts the first payment.
-                            // Falls back to the actual charged `amount` only if the
-                            // checkout predates fullPriceAmount being stashed in metadata.
-                            const renewalAmount = Number(metadata.fullPriceAmount) || amount;
-
-                            const schedule = await ghlService.createInvoiceSchedule({
-                                contactId,
-                                contactDetails: {
-                                    name: fullName,
-                                    phoneNo: phone,
-                                    email
-                                },
-                                name: `${catalogProduct.name} (Recurring)`,
-                                currency: String(currency).toUpperCase(),
-                                startAt,
-                                interval: 'month',
-                                intervalCount: 1,
-                                items: [
-                                    {
-                                        name: String(catalogProduct.name),
-                                        description: metadata.paymentReference ? `Ref: ${metadata.paymentReference}` : undefined,
-                                        currency: String(currency).toUpperCase(),
-                                        amount: renewalAmount,
-                                        qty: 1,
-                                        type: 'recurring'
-                                    }
-                                ].map(item => {
-                                    Object.keys(item).forEach(k => item[k] === undefined && delete item[k]);
-                                    return item;
-                                })
-                            });
-
-                            const scheduleId = schedule?._id || schedule?.id || schedule?.schedule?._id || schedule?.schedule?.id;
-                            if (scheduleId) {
-                                await setScheduleId({
-                                    locationId: process.env.GHL_LOCATION_ID,
-                                    contactId,
-                                    productId: catalogProduct.id,
-                                    scheduleId
-                                });
-                                console.log('GHL invoice schedule created:', scheduleId);
-
-                                try {
-                                    await ghlService.scheduleInvoiceSchedule({ scheduleId });
-                                    console.log('GHL invoice schedule activated:', scheduleId);
-                                } catch (schedErr) {
-                                    console.log('GHL invoice schedule activation error (non-fatal):', schedErr.response?.data || schedErr.message);
-                                }
-                            } else {
-                                console.log('GHL invoice schedule created but no scheduleId found:', schedule);
-                            }
-                        }
-                    }
-                } catch (scheduleErr) {
-                    console.log('GHL invoice schedule error (non-fatal):', scheduleErr.response?.data || scheduleErr.message);
-                }
-            }
-        }
-    } catch (err) {
-        console.log('GHL sync error (non-fatal):', err.response?.data || err.message);
-    }
-
     // Product access fulfillment: admin-configured per-product GHL sub-account routing,
-    // tags, removals, and custom field updates. Emails remain owned by GHL workflows.
+    // paid invoices, tags, removals, and custom field updates. Emails remain owned by GHL workflows.
     try {
         const fulfillment = await ghlFulfillment.fulfillPayment({ metadata, paymentData, isTest: isTestEvent });
         if (!fulfillment.skipped) {

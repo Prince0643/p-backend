@@ -778,7 +778,7 @@ class GhlService {
         return res.data;
     }
 
-    async createInvoice({ contactId, contactDetails, items, name, currency, issueDate, dueDate }) {
+    invoicePayload({ locationId, contactId, contactDetails, items, name, currency, issueDate, dueDate }) {
         const normalizedPhoneNo = this.normalizePhoneE164(contactDetails?.phoneNo);
         const normalizedContactDetails = {
             ...(contactDetails || {}),
@@ -786,8 +786,8 @@ class GhlService {
         };
         Object.keys(normalizedContactDetails).forEach(k => normalizedContactDetails[k] === undefined && delete normalizedContactDetails[k]);
 
-        const payload = {
-            altId: this.locationId,
+        return {
+            altId: locationId,
             altType: 'location',
             name: name || 'PayMongo Invoice',
             businessDetails: {
@@ -803,18 +803,25 @@ class GhlService {
             dueDate,
             liveMode: true
         };
+    }
+
+    async createInvoice({ contactId, contactDetails, items, name, currency, issueDate, dueDate }) {
+        const payload = this.invoicePayload({ locationId: this.locationId, contactId, contactDetails, items, name, currency, issueDate, dueDate });
 
         const res = await this.client.post('/invoices/', payload);
         return res.data;
     }
 
-    async recordInvoicePayment({ invoiceId, amount, mode = 'card', cardBrand, cardLast4, notes, fulfilledAt }) {
-        if (!invoiceId) {
-            throw new Error('invoiceId is required');
-        }
+    async createInvoiceInLocation(location, { contactId, contactDetails, items, name, currency, issueDate, dueDate }) {
+        const client = this.locationClient(location, { version: '2021-07-28' });
+        const payload = this.invoicePayload({ locationId: location.locationId, contactId, contactDetails, items, name, currency, issueDate, dueDate });
+        const res = await client.post('/invoices/', payload);
+        return res.data;
+    }
 
-        const payload = {
-            altId: this.locationId,
+    invoicePaymentPayload({ locationId, amount, mode = 'card', cardBrand, cardLast4, notes, fulfilledAt }) {
+        return {
+            altId: locationId,
             altType: 'location',
             mode: mode || 'card',
             ...(cardBrand && cardLast4 && {
@@ -827,8 +834,26 @@ class GhlService {
             amount: amount,
             fulfilledAt: fulfilledAt || new Date().toISOString()
         };
+    }
+
+    async recordInvoicePayment({ invoiceId, amount, mode = 'card', cardBrand, cardLast4, notes, fulfilledAt }) {
+        if (!invoiceId) {
+            throw new Error('invoiceId is required');
+        }
+
+        const payload = this.invoicePaymentPayload({ locationId: this.locationId, amount, mode, cardBrand, cardLast4, notes, fulfilledAt });
 
         const res = await this.client.post(`/invoices/${invoiceId}/record-payment`, payload);
+        return res.data;
+    }
+
+    async recordInvoicePaymentInLocation(location, { invoiceId, amount, mode = 'card', cardBrand, cardLast4, notes, fulfilledAt }) {
+        if (!invoiceId) {
+            throw new Error('invoiceId is required');
+        }
+        const client = this.locationClient(location, { version: '2021-07-28' });
+        const payload = this.invoicePaymentPayload({ locationId: location.locationId, amount, mode, cardBrand, cardLast4, notes, fulfilledAt });
+        const res = await client.post(`/invoices/${invoiceId}/record-payment`, payload);
         return res.data;
     }
 

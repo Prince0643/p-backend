@@ -14,7 +14,9 @@ const ghlOriginals = {
     upsertContactInLocation: ghlService.upsertContactInLocation,
     addContactTags: ghlService.addContactTags,
     removeContactTags: ghlService.removeContactTags,
-    updateContactCustomFields: ghlService.updateContactCustomFields
+    updateContactCustomFields: ghlService.updateContactCustomFields,
+    createInvoiceInLocation: ghlService.createInvoiceInLocation,
+    recordInvoicePaymentInLocation: ghlService.recordInvoicePaymentInLocation
 };
 
 afterEach(() => {
@@ -24,6 +26,8 @@ afterEach(() => {
 
 test('test-mode payments still run configured GHL sub-account fulfillment', async () => {
     const calls = { rules: [], events: [], upserts: [], addTags: [], removeTags: [], fields: [] };
+    calls.invoices = [];
+    calls.payments = [];
     const subAccount = { id: 'academy', name: 'Academy', locationId: 'loc_1', privateKey: 'pit_fake', active: true };
 
     store.listEnabledRulesForProduct = async (productId) => {
@@ -51,6 +55,14 @@ test('test-mode payments still run configured GHL sub-account fulfillment', asyn
     ghlService.addContactTags = async (account, payload) => calls.addTags.push({ account, payload });
     ghlService.removeContactTags = async (account, payload) => calls.removeTags.push({ account, payload });
     ghlService.updateContactCustomFields = async (account, payload) => calls.fields.push({ account, payload });
+    ghlService.createInvoiceInLocation = async (account, payload) => {
+        calls.invoices.push({ account, payload });
+        return { _id: 'invoice_1' };
+    };
+    ghlService.recordInvoicePaymentInLocation = async (account, payload) => {
+        calls.payments.push({ account, payload });
+        return { id: 'payment_1' };
+    };
 
     const result = await fulfillment.fulfillPayment({
         isTest: true,
@@ -75,6 +87,27 @@ test('test-mode payments still run configured GHL sub-account fulfillment', asyn
     assert.deepEqual(calls.fields[0].payload, {
         contactId: 'contact_1',
         customFields: [{ key: 'Payment Reference', fieldValue: 'PAYTEST123' }]
+    });
+    assert.equal(calls.invoices.length, 1);
+    assert.equal(calls.invoices[0].account, subAccount);
+    assert.equal(calls.invoices[0].payload.contactId, 'contact_1');
+    assert.equal(calls.invoices[0].payload.name, 'GHL Foundation Plan');
+    assert.deepEqual(calls.invoices[0].payload.items, [{
+        name: 'GHL Foundation Plan',
+        description: 'Ref: PAYTEST123',
+        currency: 'PHP',
+        amount: 1000,
+        qty: 1,
+        type: 'one_time'
+    }]);
+    assert.deepEqual(calls.payments[0].payload, {
+        invoiceId: 'invoice_1',
+        amount: 1000,
+        mode: 'card',
+        cardBrand: undefined,
+        cardLast4: undefined,
+        notes: 'PayMongo payment pay_test_1',
+        fulfilledAt: calls.payments[0].payload.fulfilledAt
     });
     assert.deepEqual(calls.events[0], {
         productId: 'ghl_foundation',

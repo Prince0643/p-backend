@@ -1,7 +1,7 @@
 // tests/setupFee.test.js
 // Recurring-product setup fee: normalization/storage, computePricing, the embed quote, the PayMongo
 // checkout session line items, affiliate commission base, card-installments eligibility and the
-// GHL first invoice vs renewal schedule.
+// GHL routed invoice items.
 require('./setupEnv');
 const { test, after, before } = require('node:test');
 const assert = require('node:assert/strict');
@@ -9,7 +9,7 @@ const request = require('supertest');
 const app = require('../index');
 const pool = require('../db/pool');
 const paymongoService = require('../services/paymongoService');
-const ghlService = require('../services/ghlService');
+const { invoiceItems } = require('../services/ghlFulfillment');
 const productCatalog = require('../utils/productCatalog');
 const { computePricing } = require('../utils/pricing');
 const { createTestCoupon, cleanupCoupon, signWebhookBody, paymentEventPayload } = require('./fixtures');
@@ -268,77 +268,29 @@ test('card installments eligibility counts the setup fee (embed pre-check and ch
     }
 });
 
-// ---------- GHL first invoice vs renewal schedule ----------
+// ---------- GHL routed invoice items ----------
 
-test('GHL: first invoice has a "Setup fee" item; the recurring schedule bills the monthly price only', async () => {
-    const envKeys = ['GHL_PRIVATE_KEY', 'GHL_LOCATION_ID'];
-    const savedEnv = Object.fromEntries(envKeys.map((k) => [k, process.env[k]]));
-    const methods = ['upsertContact', 'createInvoice', 'recordInvoicePayment', 'createInvoiceSchedule', 'scheduleInvoiceSchedule'];
-    const savedMethods = Object.fromEntries(methods.map((m) => [m, ghlService[m]]));
-    const contactId = `sf_contact_${SUFFIX}`;
-    const calls = {};
-    ghlService.upsertContact = async () => ({ contact: { id: contactId } });
-    ghlService.createInvoice = async (args) => { calls.invoice = args; return { _id: 'inv_sf' }; };
-    ghlService.recordInvoicePayment = async (args) => { calls.payment = args; return { id: 'txn_sf' }; };
-    ghlService.createInvoiceSchedule = async (args) => { calls.schedule = args; return { _id: `sched_sf_${SUFFIX}` }; };
-    ghlService.scheduleInvoiceSchedule = async () => ({});
-    process.env.GHL_PRIVATE_KEY = 'pit_fake_for_test';
-    process.env.GHL_LOCATION_ID = `loc_sf_${SUFFIX}`;
-    try {
-        intentCalls = [];
-        const co = await request(app).post('/api/embed/checkout').send(checkoutBody());
-        assert.equal(co.status, 200, JSON.stringify(co.body));
-        const metadata = intentCalls[0].metadata;
-        const payload = paymentEventPayload('payment.paid', metadata, { amountCentavos: Math.round(co.body.amount * 100) });
-        const { body, header } = signWebhookBody(payload);
-        const res = await request(app).post('/api/payments/webhook').set('Content-Type', 'application/json').set('Paymongo-Signature', header).send(body);
-        assert.equal(res.status, 200);
+test('GHL routed invoice: first invoice has a "Setup fee" item', async () => {
+    const items = invoiceItems({
+        metadata: { product: 'SF Fee', paymentReference: 'PAY_SF', setupFeeAmount: '5600' },
+        paymentData: { attributes: { amount: 728000, currency: 'PHP' } },
+        amount: 7280
+    });
 
-        const items = calls.invoice.items;
-        assert.equal(items.length, 2);
-        assert.equal(items[1].name, 'Setup fee');
-        assert.equal(items[1].amount, 5600);
-        assert.equal(items[0].amount, 1680);
-        assert.equal(Number((items[0].amount + items[1].amount).toFixed(2)), 7280);
-        assert.equal(calls.payment.amount, 7280);
-
-        assert.equal(calls.schedule.items.length, 1);
-        assert.equal(calls.schedule.items[0].amount, 1680);
-        assert.equal(calls.schedule.items[0].type, 'recurring');
-    } finally {
-        await pool.query('DELETE FROM ghl_invoice_schedules WHERE contact_id = $1', [contactId]);
-        for (const m of methods) ghlService[m] = savedMethods[m];
-        for (const k of envKeys) process.env[k] = savedEnv[k];
-    }
+    assert.equal(items.length, 2);
+    assert.equal(items[1].name, 'Setup fee');
+    assert.equal(items[1].amount, 5600);
+    assert.equal(items[0].amount, 1680);
+    assert.equal(Number((items[0].amount + items[1].amount).toFixed(2)), 7280);
 });
 
-test('GHL: a product without a setup fee still produces a single-item first invoice', async () => {
-    const envKeys = ['GHL_PRIVATE_KEY', 'GHL_LOCATION_ID'];
-    const savedEnv = Object.fromEntries(envKeys.map((k) => [k, process.env[k]]));
-    const methods = ['upsertContact', 'createInvoice', 'recordInvoicePayment', 'createInvoiceSchedule', 'scheduleInvoiceSchedule'];
-    const savedMethods = Object.fromEntries(methods.map((m) => [m, ghlService[m]]));
-    const contactId = `sf_contact_plain_${SUFFIX}`;
-    const calls = {};
-    ghlService.upsertContact = async () => ({ contact: { id: contactId } });
-    ghlService.createInvoice = async (args) => { calls.invoice = args; return { _id: 'inv_sf2' }; };
-    ghlService.recordInvoicePayment = async () => ({ id: 't' });
-    ghlService.createInvoiceSchedule = async (args) => { calls.schedule = args; return { _id: `sched_sf2_${SUFFIX}` }; };
-    ghlService.scheduleInvoiceSchedule = async () => ({});
-    process.env.GHL_PRIVATE_KEY = 'pit_fake_for_test';
-    process.env.GHL_LOCATION_ID = `loc_sf_${SUFFIX}`;
-    try {
-        intentCalls = [];
-        const co = await request(app).post('/api/embed/checkout').send(checkoutBody({ productId: ids.plain }));
-        const metadata = intentCalls[0].metadata;
-        assert.equal(metadata.setupFeeAmount, undefined);
-        const { body, header } = signWebhookBody(paymentEventPayload('payment.paid', metadata, { amountCentavos: Math.round(co.body.amount * 100) }));
-        await request(app).post('/api/payments/webhook').set('Content-Type', 'application/json').set('Paymongo-Signature', header).send(body);
-        assert.equal(calls.invoice.items.length, 1);
-        assert.equal(calls.invoice.items[0].amount, 1680);
-        assert.equal(calls.schedule.items[0].amount, 1680);
-    } finally {
-        await pool.query('DELETE FROM ghl_invoice_schedules WHERE contact_id = $1', [contactId]);
-        for (const m of methods) ghlService[m] = savedMethods[m];
-        for (const k of envKeys) process.env[k] = savedEnv[k];
-    }
+test('GHL routed invoice: a product without a setup fee produces one invoice item', async () => {
+    const items = invoiceItems({
+        metadata: { product: 'SF Plain', paymentReference: 'PAY_SF' },
+        paymentData: { attributes: { amount: 168000, currency: 'PHP' } },
+        amount: 1680
+    });
+
+    assert.equal(items.length, 1);
+    assert.equal(items[0].amount, 1680);
 });

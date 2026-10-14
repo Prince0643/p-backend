@@ -203,14 +203,14 @@ test('test webhook (te + test secret): marks paid as TEST, no GHL invoice, LeadC
     assert.equal(paid.livemode, false);
 });
 
-test('live control: a live payment still mirrors to GHL and has no isTest flag', async () => {
+test('live control: a live payment no longer mirrors invoices to MAIN GHL and has no isTest flag', async () => {
     process.env.GHL_PRIVATE_KEY = 'pit_fake'; process.env.GHL_LOCATION_ID = 'loc_fake';
     const res = await checkout();
     calls.sent.length = 0;
     const metadata = { paymentReference: res.body.paymentReference, email: 'a@example.com', fullName: 'A B', mobile: '+639171234567', product: 'TM Product', productId: PRODUCT_ID };
     assert.equal((await webhook(paidEvent(metadata, true), 'live')).status, 200);
     assert.equal((await txRow(res.body.paymentReference)).status, 'paid');
-    assert.ok(calls.ghl.some(([name]) => name === 'createInvoice'));
+    assert.deepEqual(calls.ghl, []);
     assert.equal(calls.sent.find((d) => d.status === 'payment_successful').isTest, undefined);
 });
 

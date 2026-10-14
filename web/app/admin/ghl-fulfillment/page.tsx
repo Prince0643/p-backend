@@ -16,7 +16,6 @@ type SubAccount = {
   active: boolean;
   hasPrivateKey: boolean;
 };
-type CustomField = { id?: string; key?: string; fieldValue: string };
 type Rule = {
   productId: string;
   productName?: string;
@@ -26,7 +25,7 @@ type Rule = {
   renewalTags: string[];
   everyPaymentTags: string[];
   removeTags: string[];
-  customFields: CustomField[];
+  customFields: unknown[];
   subAccount?: { name: string; locationId: string; active: boolean };
 };
 
@@ -36,7 +35,6 @@ const emptyRule = {
   subAccountId: "",
   enabled: true,
   tags: "",
-  customFields: "",
 };
 
 function splitList(value: string) {
@@ -53,24 +51,6 @@ function addTagsForRule(rule: Rule) {
 
 function slugify(input: string) {
   return input.trim().toLowerCase().replace(/['"]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
-}
-
-function parseCustomFields(value: string): CustomField[] {
-  return value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [rawKey, ...rest] = line.split("=");
-      const key = rawKey.trim();
-      const fieldValue = rest.join("=").trim();
-      if (!key || !fieldValue) throw new Error("Custom fields must use key=value, one per line.");
-      return key.startsWith("id:") ? { id: key.slice(3).trim(), fieldValue } : { key, fieldValue };
-    });
-}
-
-function formatCustomFields(fields: CustomField[]) {
-  return (fields || []).map((field) => `${field.id ? `id:${field.id}` : field.key}=${field.fieldValue}`).join("\n");
 }
 
 export default function GhlFulfillmentPage() {
@@ -172,7 +152,6 @@ export default function GhlFulfillmentPage() {
       subAccountId: rule.subAccountId,
       enabled: rule.enabled,
       tags: joinList(addTagsForRule(rule)),
-      customFields: formatCustomFields(rule.customFields),
     });
   }
 
@@ -191,7 +170,7 @@ export default function GhlFulfillmentPage() {
           renewalTags: [],
           everyPaymentTags: splitList(ruleForm.tags),
           removeTags: [],
-          customFields: parseCustomFields(ruleForm.customFields),
+          customFields: [],
         },
       });
       setRuleForm(emptyRule);
@@ -235,7 +214,7 @@ export default function GhlFulfillmentPage() {
             renewalTags: existing?.renewalTags || [],
             everyPaymentTags: existing?.everyPaymentTags || [],
             removeTags: existing?.removeTags || [],
-            customFields: existing?.customFields || [],
+            customFields: [],
           },
         });
         await load(key);
@@ -372,7 +351,7 @@ export default function GhlFulfillmentPage() {
           <form onSubmit={saveRule} className="grid gap-3 p-4">
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wide text-slate-200">Tags and fields</h3>
-              <p className="mt-1 text-xs text-slate-400">Edit a route when this product should add contact tags or set custom field values in the selected sub-account.</p>
+              <p className="mt-1 text-xs text-slate-400">Edit a route when this product should add contact tags in the selected sub-account. Payment custom fields are filled automatically.</p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
@@ -395,14 +374,7 @@ export default function GhlFulfillmentPage() {
               Enabled
             </label>
             <FieldArea label="Tags to add" value={ruleForm.tags} onChange={(v) => setRuleForm({ ...ruleForm, tags: v })} placeholder={"ghl-premium\nghlintensive_course_paid"} />
-            <FieldArea
-              label="Custom fields"
-              value={ruleForm.customFields}
-              onChange={(v) => setRuleForm({ ...ruleForm, customFields: v })}
-              placeholder={"nxacademy_product={{product}}\npaymongo_reference={{paymentReference}}\nid:FIELD_ID={{totalAmount}}"}
-              rows={5}
-            />
-            <div className="text-xs text-slate-500">Available tokens: {"{{product}}"}, {"{{productId}}"}, {"{{paymentReference}}"}, {"{{totalAmount}}"}, {"{{promoCode}}"}, {"{{cycleType}}"}, {"{{paidAt}}"}.</div>
+            <div className="text-xs text-slate-500">Automatic fields: product, product ID, PayMongo reference, payment ID, amount, currency, cycle type, and paid date.</div>
             <button type="submit" className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-500 px-4 py-2.5 text-sm font-extrabold text-slate-950">Save rule</button>
           </form>
           <div className="border-t border-white/10 p-4">

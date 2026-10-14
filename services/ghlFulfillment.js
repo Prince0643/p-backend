@@ -43,6 +43,19 @@ function resolveCustomFields(fields, context) {
     }));
 }
 
+function automaticCustomFields(context) {
+    return [
+        { key: 'nxacademy_product', fieldValue: context.product },
+        { key: 'paymongo_product_id', fieldValue: context.productId },
+        { key: 'paymongo_reference', fieldValue: context.paymentReference },
+        { key: 'paymongo_payment_id', fieldValue: context.paymentId },
+        { key: 'paymongo_amount', fieldValue: context.totalAmount },
+        { key: 'paymongo_currency', fieldValue: context.currency },
+        { key: 'paymongo_cycle_type', fieldValue: context.cycleType },
+        { key: 'paymongo_paid_at', fieldValue: context.paidAt }
+    ].filter((field) => field.fieldValue != null && String(field.fieldValue).trim() !== '');
+}
+
 function paymentAmount(paymentData) {
     const amountCentavos = Number(paymentData?.attributes?.amount);
     return Number.isFinite(amountCentavos) ? Number((amountCentavos / 100).toFixed(2)) : null;
@@ -149,7 +162,10 @@ async function fulfillPayment({ metadata, paymentData, isTest = false }) {
                 ...(cycleType === 'renewed' ? rule.renewalTags : rule.firstPaymentTags)
             ].map((tag) => resolveTemplate(tag, context)));
             const tagsToRemove = store.cleanList(rule.removeTags.map((tag) => resolveTemplate(tag, context)));
-            const customFields = resolveCustomFields(rule.customFields, context);
+            const customFields = [
+                ...automaticCustomFields(context),
+                ...resolveCustomFields(rule.customFields, context)
+            ];
 
             const upsertResult = await ghlService.upsertContactInLocation(rule.subAccount, {
                 fullName: metadata.fullName,
@@ -164,7 +180,11 @@ async function fulfillPayment({ metadata, paymentData, isTest = false }) {
 
             if (tagsToAdd.length) await ghlService.addContactTags(rule.subAccount, { contactId, tags: tagsToAdd });
             if (tagsToRemove.length) await ghlService.removeContactTags(rule.subAccount, { contactId, tags: tagsToRemove });
-            if (customFields.length) await ghlService.updateContactCustomFields(rule.subAccount, { contactId, customFields });
+            if (customFields.length) {
+                await ghlService.updateContactCustomFields(rule.subAccount, { contactId, customFields }).catch((err) => {
+                    console.log('GHL custom field update error (non-fatal):', err.response?.data || err.message);
+                });
+            }
 
             const invoiceResult = await createPaidInvoiceInSubAccount({ rule, contactId, metadata, paymentData });
             invoiceId = invoiceResult.invoiceId || null;
@@ -196,4 +216,4 @@ async function fulfillPayment({ metadata, paymentData, isTest = false }) {
     return { skipped: false, results };
 }
 
-module.exports = { fulfillPayment, resolveTemplate, resolveCustomFields, createPaidInvoiceInSubAccount, invoiceItems };
+module.exports = { fulfillPayment, resolveTemplate, resolveCustomFields, automaticCustomFields, createPaidInvoiceInSubAccount, invoiceItems };

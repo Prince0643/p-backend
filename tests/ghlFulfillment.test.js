@@ -40,7 +40,7 @@ test('test-mode payments still run configured GHL sub-account fulfillment', asyn
             renewalTags: ['course_renewed'],
             everyPaymentTags: ['paid_{{productId}}'],
             removeTags: ['course_expired'],
-            customFields: [{ key: 'Payment Reference', fieldValue: '{{paymentReference}}' }]
+            customFields: []
         }];
     };
     store.hasPriorSuccessfulEvent = async () => false;
@@ -86,7 +86,16 @@ test('test-mode payments still run configured GHL sub-account fulfillment', asyn
     assert.deepEqual(calls.removeTags[0].payload, { contactId: 'contact_1', tags: ['course_expired'] });
     assert.deepEqual(calls.fields[0].payload, {
         contactId: 'contact_1',
-        customFields: [{ key: 'Payment Reference', fieldValue: 'PAYTEST123' }]
+        customFields: [
+            { key: 'nxacademy_product', fieldValue: 'GHL Foundation Plan' },
+            { key: 'paymongo_product_id', fieldValue: 'ghl_foundation' },
+            { key: 'paymongo_reference', fieldValue: 'PAYTEST123' },
+            { key: 'paymongo_payment_id', fieldValue: 'pay_test_1' },
+            { key: 'paymongo_amount', fieldValue: '1000' },
+            { key: 'paymongo_currency', fieldValue: 'PHP' },
+            { key: 'paymongo_cycle_type', fieldValue: 'availed' },
+            { key: 'paymongo_paid_at', fieldValue: calls.fields[0].payload.customFields[7].fieldValue }
+        ]
     });
     assert.equal(calls.invoices.length, 1);
     assert.equal(calls.invoices[0].account, subAccount);

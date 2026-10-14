@@ -1,5 +1,6 @@
 const store = require('../utils/ghlFulfillmentStore');
 const ghlService = require('../services/ghlService');
+const ghlFulfillment = require('../services/ghlFulfillment');
 
 function slug(input) {
     return String(input || '')
@@ -79,6 +80,40 @@ exports.importEnvSubAccounts = async (req, res) => {
         res.json({ success: true, imported, count: imported.length });
     } catch (err) {
         res.status(400).json({ error: err.message || 'Failed to import env GHL sub-accounts' });
+    }
+};
+
+exports.ensureCustomFields = async (req, res) => {
+    try {
+        const accounts = await store.listSubAccounts({ includeSecret: true });
+        const activeAccounts = accounts.filter((account) => account.active);
+        const results = [];
+        for (const account of activeAccounts) {
+            try {
+                const summary = await ghlFulfillment.ensurePaymongoCustomFields(account);
+                results.push({
+                    subAccountId: account.id,
+                    name: account.name,
+                    locationId: account.locationId,
+                    created: summary.created.map((field) => ({
+                        id: field.id,
+                        name: field.name,
+                        fieldKey: field.fieldKey
+                    })),
+                    existing: summary.existing
+                });
+            } catch (err) {
+                results.push({
+                    subAccountId: account.id,
+                    name: account.name,
+                    locationId: account.locationId,
+                    error: err.response?.data?.message || err.message
+                });
+            }
+        }
+        res.json({ success: true, results });
+    } catch (err) {
+        res.status(500).json({ error: err.message || 'Failed to ensure GHL custom fields' });
     }
 };
 

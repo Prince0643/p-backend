@@ -1,6 +1,17 @@
 const ghlService = require('./ghlService');
 const store = require('../utils/ghlFulfillmentStore');
 
+const PAYMONGO_CUSTOM_FIELDS = [
+    { key: 'nxacademy_product', name: 'NXAcademy Product', dataType: 'TEXT' },
+    { key: 'paymongo_product_id', name: 'PayMongo Product ID', dataType: 'TEXT' },
+    { key: 'paymongo_reference', name: 'PayMongo Reference', dataType: 'TEXT' },
+    { key: 'paymongo_payment_id', name: 'PayMongo Payment ID', dataType: 'TEXT' },
+    { key: 'paymongo_amount', name: 'PayMongo Amount', dataType: 'TEXT' },
+    { key: 'paymongo_currency', name: 'PayMongo Currency', dataType: 'TEXT' },
+    { key: 'paymongo_cycle_type', name: 'PayMongo Cycle Type', dataType: 'TEXT' },
+    { key: 'paymongo_paid_at', name: 'PayMongo Paid At', dataType: 'TEXT' }
+];
+
 function contactIdFromUpsert(result) {
     return result?.contact?.id || result?.id || result?.contactId || result?.contact?._id || null;
 }
@@ -44,16 +55,24 @@ function resolveCustomFields(fields, context) {
 }
 
 function automaticCustomFields(context) {
-    return [
-        { key: 'nxacademy_product', fieldValue: context.product },
-        { key: 'paymongo_product_id', fieldValue: context.productId },
-        { key: 'paymongo_reference', fieldValue: context.paymentReference },
-        { key: 'paymongo_payment_id', fieldValue: context.paymentId },
-        { key: 'paymongo_amount', fieldValue: context.totalAmount },
-        { key: 'paymongo_currency', fieldValue: context.currency },
-        { key: 'paymongo_cycle_type', fieldValue: context.cycleType },
-        { key: 'paymongo_paid_at', fieldValue: context.paidAt }
-    ].filter((field) => field.fieldValue != null && String(field.fieldValue).trim() !== '');
+    const values = {
+        nxacademy_product: context.product,
+        paymongo_product_id: context.productId,
+        paymongo_reference: context.paymentReference,
+        paymongo_payment_id: context.paymentId,
+        paymongo_amount: context.totalAmount,
+        paymongo_currency: context.currency,
+        paymongo_cycle_type: context.cycleType,
+        paymongo_paid_at: context.paidAt
+    };
+    return PAYMONGO_CUSTOM_FIELDS.map((field) => ({
+        key: field.key,
+        fieldValue: values[field.key]
+    })).filter((field) => field.fieldValue != null && String(field.fieldValue).trim() !== '');
+}
+
+async function ensurePaymongoCustomFields(location) {
+    return ghlService.ensureCustomFieldsForLocation(location, PAYMONGO_CUSTOM_FIELDS);
 }
 
 function paymentAmount(paymentData) {
@@ -167,6 +186,10 @@ async function fulfillPayment({ metadata, paymentData, isTest = false }) {
                 ...resolveCustomFields(rule.customFields, context)
             ];
 
+            await ensurePaymongoCustomFields(rule.subAccount).catch((err) => {
+                console.log('GHL custom field setup error (non-fatal):', err.response?.data || err.message);
+            });
+
             const upsertResult = await ghlService.upsertContactInLocation(rule.subAccount, {
                 fullName: metadata.fullName,
                 email,
@@ -216,4 +239,13 @@ async function fulfillPayment({ metadata, paymentData, isTest = false }) {
     return { skipped: false, results };
 }
 
-module.exports = { fulfillPayment, resolveTemplate, resolveCustomFields, automaticCustomFields, createPaidInvoiceInSubAccount, invoiceItems };
+module.exports = {
+    PAYMONGO_CUSTOM_FIELDS,
+    fulfillPayment,
+    resolveTemplate,
+    resolveCustomFields,
+    automaticCustomFields,
+    ensurePaymongoCustomFields,
+    createPaidInvoiceInSubAccount,
+    invoiceItems
+};

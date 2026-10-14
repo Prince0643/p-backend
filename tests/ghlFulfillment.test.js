@@ -15,6 +15,7 @@ const ghlOriginals = {
     addContactTags: ghlService.addContactTags,
     removeContactTags: ghlService.removeContactTags,
     updateContactCustomFields: ghlService.updateContactCustomFields,
+    ensureCustomFieldsForLocation: ghlService.ensureCustomFieldsForLocation,
     createInvoiceInLocation: ghlService.createInvoiceInLocation,
     recordInvoicePaymentInLocation: ghlService.recordInvoicePaymentInLocation
 };
@@ -54,6 +55,7 @@ test('test-mode payments still run configured GHL sub-account fulfillment', asyn
     };
     ghlService.addContactTags = async (account, payload) => calls.addTags.push({ account, payload });
     ghlService.removeContactTags = async (account, payload) => calls.removeTags.push({ account, payload });
+    ghlService.ensureCustomFieldsForLocation = async () => ({ created: [], existing: [] });
     ghlService.updateContactCustomFields = async (account, payload) => calls.fields.push({ account, payload });
     ghlService.createInvoiceInLocation = async (account, payload) => {
         calls.invoices.push({ account, payload });

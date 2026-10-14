@@ -280,6 +280,49 @@ class GhlService {
         return res.data;
     }
 
+    async listCustomFieldsForLocation(location) {
+        const client = this.locationClient(location, { version: 'v3' });
+        const res = await client.get(`/locations/${location.locationId}/customFields`, { params: { model: 'contact' } });
+        return Array.isArray(res.data?.customFields) ? res.data.customFields : [];
+    }
+
+    async createCustomFieldForLocation(location, field) {
+        const client = this.locationClient(location, { version: 'v3' });
+        const res = await client.post(`/locations/${location.locationId}/customFields`, {
+            name: field.name,
+            dataType: field.dataType || 'TEXT',
+            placeholder: field.placeholder || field.name,
+            model: 'contact',
+            position: field.position || 0
+        });
+        return res.data?.customField || res.data;
+    }
+
+    async ensureCustomFieldsForLocation(location, fields) {
+        if (!Array.isArray(fields) || fields.length === 0) return { created: [], existing: [] };
+        const existing = await this.listCustomFieldsForLocation(location);
+        const existingKeys = new Set(existing.map((field) => String(field.fieldKey || '').replace(/^contact\./, '').toLowerCase()));
+        const existingNames = new Set(existing.map((field) => String(field.name || '').trim().toLowerCase()));
+        const created = [];
+        const alreadyExisting = [];
+
+        for (const field of fields) {
+            const key = String(field.key || '').trim();
+            const name = String(field.name || key).trim();
+            if (!key || !name) continue;
+            if (existingKeys.has(key.toLowerCase()) || existingNames.has(name.toLowerCase())) {
+                alreadyExisting.push({ key, name });
+                continue;
+            }
+            const customField = await this.createCustomFieldForLocation(location, { ...field, name });
+            created.push(customField);
+            if (customField?.fieldKey) existingKeys.add(String(customField.fieldKey).replace(/^contact\./, '').toLowerCase());
+            existingNames.add(name.toLowerCase());
+        }
+
+        return { created, existing: alreadyExisting };
+    }
+
     async addContactTags(location, { contactId, tags }) {
         if (!contactId) throw new Error('contactId is required');
         const cleanTags = Array.isArray(tags) ? tags.filter(Boolean) : [];

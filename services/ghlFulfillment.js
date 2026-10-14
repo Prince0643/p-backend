@@ -44,7 +44,6 @@ function resolveCustomFields(fields, context) {
 }
 
 async function fulfillPayment({ metadata, paymentData, isTest = false }) {
-    if (isTest) return { skipped: true, reason: 'test_payment' };
     const productId = metadata.productId;
     const email = metadata.email;
     const paymentReference = metadata.paymentReference || paymentData?.id;

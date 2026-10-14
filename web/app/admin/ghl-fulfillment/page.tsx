@@ -35,10 +35,7 @@ const emptyRule = {
   productId: "",
   subAccountId: "",
   enabled: true,
-  firstPaymentTags: "",
-  renewalTags: "",
-  everyPaymentTags: "",
-  removeTags: "",
+  tags: "",
   customFields: "",
 };
 
@@ -48,6 +45,10 @@ function splitList(value: string) {
 
 function joinList(value: string[]) {
   return (value || []).join("\n");
+}
+
+function addTagsForRule(rule: Rule) {
+  return Array.from(new Set([...(rule.everyPaymentTags || []), ...(rule.firstPaymentTags || []), ...(rule.renewalTags || [])]));
 }
 
 function slugify(input: string) {
@@ -170,10 +171,7 @@ export default function GhlFulfillmentPage() {
       productId: rule.productId,
       subAccountId: rule.subAccountId,
       enabled: rule.enabled,
-      firstPaymentTags: joinList(rule.firstPaymentTags),
-      renewalTags: joinList(rule.renewalTags),
-      everyPaymentTags: joinList(rule.everyPaymentTags),
-      removeTags: joinList(rule.removeTags),
+      tags: joinList(addTagsForRule(rule)),
       customFields: formatCustomFields(rule.customFields),
     });
   }
@@ -189,10 +187,10 @@ export default function GhlFulfillmentPage() {
           productId: ruleForm.productId,
           subAccountId: ruleForm.subAccountId,
           enabled: ruleForm.enabled,
-          firstPaymentTags: splitList(ruleForm.firstPaymentTags),
-          renewalTags: splitList(ruleForm.renewalTags),
-          everyPaymentTags: splitList(ruleForm.everyPaymentTags),
-          removeTags: splitList(ruleForm.removeTags),
+          firstPaymentTags: [],
+          renewalTags: [],
+          everyPaymentTags: splitList(ruleForm.tags),
+          removeTags: [],
           customFields: parseCustomFields(ruleForm.customFields),
         },
       });
@@ -373,8 +371,8 @@ export default function GhlFulfillmentPage() {
           </div>
           <form onSubmit={saveRule} className="grid gap-3 p-4">
             <div>
-              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-200">Advanced tags and fields</h3>
-              <p className="mt-1 text-xs text-slate-400">Edit a route when it needs access tags, expired-tag cleanup, or custom field values.</p>
+              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-200">Tags and fields</h3>
+              <p className="mt-1 text-xs text-slate-400">Edit a route when this product should add contact tags or set custom field values in the selected sub-account.</p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
@@ -396,12 +394,7 @@ export default function GhlFulfillmentPage() {
               <input type="checkbox" checked={ruleForm.enabled} onChange={(e) => setRuleForm({ ...ruleForm, enabled: e.target.checked })} />
               Enabled
             </label>
-            <div className="grid gap-3 md:grid-cols-2">
-              <FieldArea label="First payment tags" value={ruleForm.firstPaymentTags} onChange={(v) => setRuleForm({ ...ruleForm, firstPaymentTags: v })} placeholder="dedicated_coaching_availed" />
-              <FieldArea label="Renewal tags" value={ruleForm.renewalTags} onChange={(v) => setRuleForm({ ...ruleForm, renewalTags: v })} placeholder="dedicated_coaching_renewed" />
-              <FieldArea label="Every payment tags" value={ruleForm.everyPaymentTags} onChange={(v) => setRuleForm({ ...ruleForm, everyPaymentTags: v })} placeholder="paymongo_academy_received" />
-              <FieldArea label="Remove tags" value={ruleForm.removeTags} onChange={(v) => setRuleForm({ ...ruleForm, removeTags: v })} placeholder="dedicated_coaching_expired" />
-            </div>
+            <FieldArea label="Tags to add" value={ruleForm.tags} onChange={(v) => setRuleForm({ ...ruleForm, tags: v })} placeholder={"ghl-premium\nghlintensive_course_paid"} />
             <FieldArea
               label="Custom fields"
               value={ruleForm.customFields}
@@ -421,10 +414,8 @@ export default function GhlFulfillmentPage() {
                       <div className="font-bold text-slate-100">{r.productName || productById.get(r.productId)?.name || r.productId}</div>
                       <div className="text-xs text-slate-400">{r.subAccount?.name || r.subAccountId} · {r.enabled ? "enabled" : "disabled"}</div>
                       <div className="mt-2 grid gap-1 text-xs text-slate-500">
-                        <div>First: {r.firstPaymentTags.join(", ") || "-"}</div>
-                        <div>Renewal: {r.renewalTags.join(", ") || "-"}</div>
-                        <div>Every: {r.everyPaymentTags.join(", ") || "-"}</div>
-                        <div>Remove: {r.removeTags.join(", ") || "-"}</div>
+                        <div>Tags: {addTagsForRule(r).join(", ") || "-"}</div>
+                        {r.removeTags.length > 0 && <div>Remove: {r.removeTags.join(", ")}</div>}
                       </div>
                     </div>
                     <div className="flex gap-2">

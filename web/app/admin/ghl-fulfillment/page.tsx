@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AdminTopbar } from "@/components/AdminTopbar";
 import { Toast } from "@/components/Toast";
 import { apiFetch } from "@/lib/api";
@@ -61,7 +61,9 @@ export default function GhlFulfillmentPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [accountForm, setAccountForm] = useState(emptyAccount);
   const [ruleForm, setRuleForm] = useState(emptyRule);
-  const [routeProductId, setRouteProductId] = useState("");
+  const ruleFormRef = useRef<HTMLFormElement>(null);
+  const routeProductId = ruleForm.productId;
+  const visibleRules = routeProductId ? rules.filter((rule) => rule.productId === routeProductId) : rules;
 
   const load = useCallback(async (key: string) => {
     const [cfg, prods] = await Promise.all([
@@ -146,6 +148,10 @@ export default function GhlFulfillmentPage() {
     }
   }
 
+  function selectProduct(productId: string) {
+    setRuleForm({ ...emptyRule, productId });
+  }
+
   function editRule(rule: Rule) {
     setRuleForm({
       productId: rule.productId,
@@ -153,6 +159,9 @@ export default function GhlFulfillmentPage() {
       enabled: rule.enabled,
       tags: joinList(addTagsForRule(rule)),
     });
+    ruleFormRef.current?.scrollIntoView({ block: "center" });
+    ruleFormRef.current?.querySelector("textarea")?.focus({ preventScroll: true });
+    toast("Rule loaded. Edit the form above and save your changes.");
   }
 
   async function saveRule(e: React.FormEvent) {
@@ -173,7 +182,7 @@ export default function GhlFulfillmentPage() {
           customFields: [],
         },
       });
-      setRuleForm(emptyRule);
+      setRuleForm({ ...emptyRule, productId: ruleForm.productId });
       await load(key);
       toast("Rule saved.");
     } catch (e) {
@@ -318,7 +327,7 @@ export default function GhlFulfillmentPage() {
             </div>
             <label className="block">
               <span className="mb-1.5 block text-xs font-semibold text-slate-300">Product</span>
-              <select className="input" value={routeProductId} onChange={(e) => setRouteProductId(e.target.value)}>
+              <select className="input" value={routeProductId} onChange={(e) => selectProduct(e.target.value)}>
                 <option value="">Select product</option>
                 {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
@@ -348,7 +357,7 @@ export default function GhlFulfillmentPage() {
               {subAccounts.length === 0 && <div className="text-sm text-slate-400">Add a GHL sub-account first.</div>}
             </div>
           </div>
-          <form onSubmit={saveRule} className="grid gap-3 p-4">
+          <form ref={ruleFormRef} onSubmit={saveRule} className="grid scroll-mt-40 gap-3 p-4">
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wide text-slate-200">Tags and fields</h3>
               <p className="mt-1 text-xs text-slate-400">Edit a route when this product should add contact tags in the selected sub-account. Payment custom fields are filled automatically.</p>
@@ -356,7 +365,7 @@ export default function GhlFulfillmentPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block">
                 <span className="mb-1.5 block text-xs font-semibold text-slate-300">Product</span>
-                <select className="input" value={ruleForm.productId} onChange={(e) => setRuleForm({ ...ruleForm, productId: e.target.value })}>
+                <select className="input" value={ruleForm.productId} onChange={(e) => selectProduct(e.target.value)}>
                   <option value="">Select product</option>
                   {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
@@ -379,7 +388,7 @@ export default function GhlFulfillmentPage() {
           </form>
           <div className="border-t border-white/10 p-4">
             <div className="grid gap-2">
-              {rules.map((r) => (
+              {visibleRules.map((r) => (
                 <div key={`${r.productId}:${r.subAccountId}`} className="rounded-lg border border-white/10 bg-white/[.03] p-3 text-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -397,7 +406,7 @@ export default function GhlFulfillmentPage() {
                   </div>
                 </div>
               ))}
-              {rules.length === 0 && <div className="text-sm text-slate-400">No product rules configured.</div>}
+              {visibleRules.length === 0 && <div className="text-sm text-slate-400">{routeProductId ? "No rules configured for this product." : "No product rules configured."}</div>}
             </div>
           </div>
         </section>

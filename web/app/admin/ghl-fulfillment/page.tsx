@@ -152,6 +152,16 @@ export default function GhlFulfillmentPage() {
     setRuleForm({ ...emptyRule, productId });
   }
 
+  function selectSubAccount(subAccountId: string) {
+    const existing = getRouteRule(ruleForm.productId, subAccountId);
+    setRuleForm({
+      ...ruleForm,
+      subAccountId,
+      enabled: existing?.enabled ?? true,
+      tags: existing ? joinList(addTagsForRule(existing)) : "",
+    });
+  }
+
   function editRule(rule: Rule) {
     setRuleForm({
       productId: rule.productId,
@@ -169,20 +179,25 @@ export default function GhlFulfillmentPage() {
     const key = requireAuth();
     if (!key) return;
     try {
+      const config = await apiFetch<{ rules: Rule[] }>("/api/admin/ghl-fulfillment", key);
+      const existing = config.rules.find((rule) => rule.productId === ruleForm.productId && rule.subAccountId === ruleForm.subAccountId);
+      const savedTags = existing ? addTagsForRule(existing) : [];
+      const newTags = splitList(ruleForm.tags).filter((tag) => !savedTags.includes(tag));
+      const everyPaymentTags = Array.from(new Set([...(existing?.everyPaymentTags || []), ...newTags]));
       await apiFetch("/api/admin/ghl-fulfillment/rules", key, {
         method: "POST",
         body: {
           productId: ruleForm.productId,
           subAccountId: ruleForm.subAccountId,
           enabled: ruleForm.enabled,
-          firstPaymentTags: [],
-          renewalTags: [],
-          everyPaymentTags: splitList(ruleForm.tags),
-          removeTags: [],
-          customFields: [],
+          firstPaymentTags: existing?.firstPaymentTags || [],
+          renewalTags: existing?.renewalTags || [],
+          everyPaymentTags,
+          removeTags: existing?.removeTags || [],
+          customFields: existing?.customFields || [],
         },
       });
-      setRuleForm({ ...emptyRule, productId: ruleForm.productId });
+      setRuleForm({ ...ruleForm, tags: joinList(Array.from(new Set([...savedTags, ...newTags]))) });
       await load(key);
       toast("Rule saved.");
     } catch (e) {
@@ -372,7 +387,7 @@ export default function GhlFulfillmentPage() {
               </label>
               <label className="block">
                 <span className="mb-1.5 block text-xs font-semibold text-slate-300">Sub-account</span>
-                <select className="input" value={ruleForm.subAccountId} onChange={(e) => setRuleForm({ ...ruleForm, subAccountId: e.target.value })}>
+                <select className="input" value={ruleForm.subAccountId} onChange={(e) => selectSubAccount(e.target.value)} required>
                   <option value="">Select sub-account</option>
                   {subAccounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
@@ -383,6 +398,7 @@ export default function GhlFulfillmentPage() {
               Enabled
             </label>
             <FieldArea label="Tags to add" value={ruleForm.tags} onChange={(v) => setRuleForm({ ...ruleForm, tags: v })} placeholder={"ghl-premium\nghlintensive_course_paid"} />
+            <p className="text-xs text-slate-400">Existing tags are kept when you save. Add more tags on separate lines or separated by commas.</p>
             <div className="text-xs text-slate-500">Automatic fields: product, product ID, PayMongo reference, payment ID, amount, currency, cycle type, and paid date.</div>
             <button type="submit" className="rounded-lg bg-gradient-to-b from-blue-400 to-blue-500 px-4 py-2.5 text-sm font-extrabold text-slate-950">Save rule</button>
           </form>
